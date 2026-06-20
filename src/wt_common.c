@@ -65,22 +65,22 @@ static char wt_unescape_char(char c)
 
 int wt_split_args_quoted(char *line, char **argv, size_t argv_max)
 {
-	char *p = line;
+	char *read = line;
 	size_t argc = 0;
 
 	if (!line || !argv || argv_max == 0) {
 		return -EINVAL;
 	}
 
-	while (*p) {
-		char *out;
-		bool in_token = false;
+	while (*read) {
+		char *write;
+		char quote = '\0';
 
-		while (*p && wt_is_cmd_space(*p)) {
-			*p++ = '\0';
+		while (*read && wt_is_cmd_space(*read)) {
+			*read++ = '\0';
 		}
 
-		if (!*p) {
+		if (!*read) {
 			break;
 		}
 
@@ -88,49 +88,47 @@ int wt_split_args_quoted(char *line, char **argv, size_t argv_max)
 			return -E2BIG;
 		}
 
-		argv[argc++] = p;
-		out = p;
-		in_token = true;
+		argv[argc++] = read;
+		write = read;
 
-		while (*p && in_token) {
-			if (wt_is_cmd_space(*p)) {
+		while (*read) {
+			char c = *read++;
+
+			if (quote) {
+				if (c == '\\' && *read) {
+					*write++ = wt_unescape_char(*read++);
+					continue;
+				}
+				if (c == quote) {
+					quote = '\0';
+					continue;
+				}
+				*write++ = c;
+				continue;
+			}
+
+			if (c == '\'' || c == '"') {
+				quote = c;
+				continue;
+			}
+
+			if (wt_is_cmd_space(c)) {
 				break;
 			}
 
-			if (*p == '\'' || *p == '"') {
-				char quote = *p++;
-
-				while (*p && *p != quote) {
-					if (*p == '\\' && p[1]) {
-						p++;
-						*out++ = wt_unescape_char(*p++);
-					} else {
-						*out++ = *p++;
-					}
-				}
-
-				if (*p != quote) {
-					return -EINVAL;
-				}
-
-				p++;
+			if (c == '\\' && *read) {
+				*write++ = wt_unescape_char(*read++);
 				continue;
 			}
 
-			if (*p == '\\' && p[1]) {
-				p++;
-				*out++ = wt_unescape_char(*p++);
-				continue;
-			}
-
-			*out++ = *p++;
+			*write++ = c;
 		}
 
-		*out = '\0';
-
-		while (*p && wt_is_cmd_space(*p)) {
-			*p++ = '\0';
+		if (quote) {
+			return -EINVAL;
 		}
+
+		*write = '\0';
 	}
 
 	return (int)argc;

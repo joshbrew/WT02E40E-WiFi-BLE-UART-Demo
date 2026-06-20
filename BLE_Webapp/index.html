@@ -425,7 +425,7 @@
         </div>
         <label>
           Wi-Fi command
-          <textarea id="wifiCommandInput" spellcheck="false" placeholder="status&#10;wifi status&#10;tx uart hello from wifi command"></textarea>
+          <textarea id="wifiCommandInput" spellcheck="false" placeholder="status&#10;wifi status&#10;tx uart &quot;hello from wifi command&quot;"></textarea>
         </label>
         <div class="row">
           <button id="copyBleCmdToWifiBtn">Copy BLE command here</button>
@@ -543,7 +543,7 @@
   <script>
     "use strict";
 
-    const WEBAPP_VERSION = "2026-06-20-wifi-scan-v11";
+    const WEBAPP_VERSION = "2026-06-20-parserfix2-v15";
 
     const UUIDS = {
       service: "7f1c0001-2b5a-4f2d-9a31-d6a5f4e040e1",
@@ -583,7 +583,7 @@
       { group: "BLE", name: "BLE off", cmd: "ble off", desc: "Stop BLE from any transport. From BLE, response is sent first, then the link disconnects." },
       { group: "BLE", name: "BLE name get", cmd: "ble name", desc: "Read the current BLE advertised name." },
       { group: "BLE", name: "BLE name set", cmd: "ble name set WT02E40E-CMD-01", desc: "Rename the BLE advertised connection name at runtime." },
-      { group: "BLE", name: "BLE TX test", cmd: "tx ble hello from the web console", desc: "Notify a BLE TX message to subscribed clients." },
+      { group: "BLE", name: "BLE TX test", cmd: "tx ble \"hello from the web console\"", desc: "Notify a BLE TX message to subscribed clients." },
 
       { group: "Wi-Fi", name: "Wi-Fi on", cmd: "wifi on", desc: "Start Wi-Fi connection using stored or compiled credentials." },
       { group: "Wi-Fi", name: "Wi-Fi off", cmd: "wifi off", desc: "Stop Wi-Fi request state." },
@@ -606,9 +606,9 @@
       { group: "Wi-Fi", name: "Forget SSID", cmd: "wifi cred forget YOUR_SSID", desc: "Remove one runtime credential." },
       { group: "Wi-Fi", name: "Clear credentials", cmd: "wifi cred clear", desc: "Clear runtime credentials. Compiled fallback remains in firmware." },
 
-      { group: "Transmit", name: "UART TX", cmd: "tx uart hello from BLE command console", desc: "Send text out the firmware UART TX path." },
-      { group: "Transmit", name: "Wi-Fi UDP TX", cmd: "tx wifi HOST_IP 5000 hello from WT02E40E over UDP", desc: "Send a UDP packet from the board to a target IPv4/port." },
-      { group: "Transmit", name: "Combined TX", cmd: "tx both HOST_IP 5000 hello over the combined transmit path", desc: "Use the firmware combined transmit command." },
+      { group: "Transmit", name: "UART TX", cmd: "tx uart \"hello from BLE command console\"", desc: "Send text out the firmware UART TX path." },
+      { group: "Transmit", name: "Wi-Fi UDP TX", cmd: "tx wifi HOST_IP 5000 \"hello from WT02E40E over UDP\"", desc: "Send a UDP packet from the board to a target IPv4/port." },
+      { group: "Transmit", name: "Combined TX", cmd: "tx both HOST_IP 5000 \"hello over the combined transmit path\"", desc: "Use the firmware combined transmit command." },
 
       { group: "Bridge", name: "Bridge status", cmd: "bridge status", desc: "Show enabled bridge outputs and Wi-Fi bridge target." },
       { group: "Bridge", name: "Bridge target this page", cmd: "bridge target HOST_IP 5000", desc: "Set the bridge Wi-Fi target to this Node page." },
@@ -623,11 +623,11 @@
       { group: "Firmware", name: "Bootloader reboot placeholder", cmd: "fw reboot bootloader 5s", desc: "Placeholder command; currently falls back to cold reboot." },
 
       { group: "Bring-up", name: "Configure and enable Wi-Fi", cmd: "mode both\nwifi cred set YOUR_SSID YOUR_PASSWORD wpa2\nwifi on\nwifi cmd on\nwifi status", desc: "Common bring-up sequence with BLE and Wi-Fi command server available." },
-      { group: "Bring-up", name: "Send board UDP to this page", cmd: "tx wifi HOST_IP 5000 hello from WT02E40E over UDP", desc: "Use Node's UDP listener as the packet target." },
+      { group: "Bring-up", name: "Send board UDP to this page", cmd: "tx wifi HOST_IP 5000 \"hello from WT02E40E over UDP\"", desc: "Use Node's UDP listener as the packet target." },
       { group: "Bring-up", name: "Ping all status paths", cmd: "status\nble status\nwifi status\nwifi cmd status\nwifi cred list", desc: "Small diagnostic batch." },
       { group: "Wi-Fi Command", name: "Wi-Fi command status over Wi-Fi", cmd: "wifi cmd status", desc: "Send this through the Wi-Fi command panel to test the UDP command path." },
       { group: "Wi-Fi Command", name: "Status over Wi-Fi", cmd: "status", desc: "Send this through the Wi-Fi command panel to get status over UDP." },
-      { group: "Wi-Fi Command", name: "UART TX over Wi-Fi", cmd: "tx uart hello from wifi command", desc: "Send UART text by issuing a command over Wi-Fi UDP." }
+      { group: "Wi-Fi Command", name: "UART TX over Wi-Fi", cmd: "tx uart \"hello from wifi command\"", desc: "Send UART text by issuing a command over Wi-Fi UDP." }
     ];
 
     const COMMON_TEMPLATE_NAMES = [
@@ -1457,7 +1457,7 @@
       const host = selectedHostIp();
       const port = selectedUdpPort();
       const message = el.wifiMessageInput.value || "hello from WT02E40E over UDP";
-      return `tx wifi ${host} ${port} ${message}`;
+      return `tx wifi ${host} ${port} ${quoteCommandArg(message)}`;
     }
 
     el.connectBtn.addEventListener("click", connect);

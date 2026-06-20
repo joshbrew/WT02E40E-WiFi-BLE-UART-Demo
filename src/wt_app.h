@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WT_APP_FW_VERSION "0.3.2-wifi-scan"
+#define WT_APP_FW_VERSION "0.3.5-parserfix2"
 
 int wt_app_settings_init(void);
 int wt_app_config_save(void);

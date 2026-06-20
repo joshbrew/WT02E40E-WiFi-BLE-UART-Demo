@@ -6,6 +6,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/util.h>
 
@@ -44,6 +45,9 @@ static char ble_name[WT_BLE_NAME_MAX + 1] = CONFIG_BT_DEVICE_NAME;
 static struct k_work_delayable ble_status_ping_work;
 static struct k_work_delayable ble_adv_restart_work;
 static struct k_work_delayable ble_self_stop_work;
+static struct k_work_delayable ble_cmd_work;
+static char ble_cmd_work_buf[WT_BLE_CMD_TEXT_MAX];
+static atomic_t ble_cmd_work_busy;
 
 #define WT_BT_UUID_SERVICE_VAL \
 	BT_UUID_128_ENCODE(0x7f1c0001, 0x2b5a, 0x4f2d, 0x9a31, 0xd6a5f4e040e1)
@@ -64,6 +68,7 @@ static struct bt_uuid_128 wt_bt_rsp_uuid = BT_UUID_INIT_128(WT_BT_UUID_RSP_VAL);
 
 static int build_status_payload(char *buf, size_t size);
 static int wt_ble_command_execute(const char *line);
+static void wt_ble_cmd_work_handler(struct k_work *work);
 static void wt_ble_status_ping_work_handler(struct k_work *work);
 static void wt_ble_status_reschedule(void);
 static void wt_ble_adv_restart_work_handler(struct k_work *work);
@@ -202,8 +207,6 @@ static int wt_ble_rsp_send(const char *fmt, ...);
 static ssize_t wt_ble_cmd_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 				       const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
-	int ret;
-
 	ARG_UNUSED(conn);
 	ARG_UNUSED(attr);
 	ARG_UNUSED(flags);
@@ -220,11 +223,24 @@ static ssize_t wt_ble_cmd_write(struct bt_conn *conn, const struct bt_gatt_attr 
 	memcpy(&ble_cmd_buf[offset], buf, len);
 	ble_cmd_buf[offset + len] = '\0';
 
-	LOG_INF("BLE command: %s", ble_cmd_buf);
-	ret = wt_ble_command_execute(ble_cmd_buf);
-	if (ret) {
-		LOG_WRN("BLE command failed: %d", ret);
+	if (!atomic_cas(&ble_cmd_work_busy, 0, 1)) {
+		if (offset == 0) {
+			LOG_WRN("BLE command dropped while previous command is still running");
+			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+		}
 	}
+
+	strncpy(ble_cmd_work_buf, ble_cmd_buf, sizeof(ble_cmd_work_buf) - 1);
+	ble_cmd_work_buf[sizeof(ble_cmd_work_buf) - 1] = '\0';
+	LOG_INF("BLE command queued: %s", ble_cmd_work_buf);
+
+	/*
+	 * Some Web Bluetooth paths use offset writes / long-write style writes even for
+	 * moderately small strings when the negotiated MTU is conservative. Do not run
+	 * the command on the first fragment. Reschedule a short debounce so additional
+	 * fragments can extend ble_cmd_buf before the command dispatcher executes.
+	 */
+	k_work_reschedule(&ble_cmd_work, K_MSEC(35));
 
 	return len;
 }
@@ -419,6 +435,82 @@ int wt_ble_status_format(char *buf, size_t size)
 }
 
 
+
+static const char *wt_ble_skip_spaces_raw(const char *p)
+{
+	while (p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) {
+		p++;
+	}
+	return p;
+}
+
+static const char *wt_ble_skip_token_raw(const char *p)
+{
+	p = wt_ble_skip_spaces_raw(p);
+	while (p && *p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
+		p++;
+	}
+	return wt_ble_skip_spaces_raw(p);
+}
+
+static const char *wt_ble_raw_tx_tail(const char *line, size_t tokens_to_skip)
+{
+	const char *p = line;
+
+	if (!p) {
+		return NULL;
+	}
+
+	p = wt_ble_skip_spaces_raw(p);
+
+	/* Optional request id prefix. */
+	if (p && *p == '#') {
+		p = wt_ble_skip_token_raw(p);
+	}
+
+	/* Optional UART-style prefix accepted by BLE command parser. */
+	if (p && !strncmp(p, "wt", 2) && (p[2] == '\0' || p[2] == ' ' || p[2] == '\t')) {
+		p = wt_ble_skip_token_raw(p);
+	}
+
+	for (size_t i = 0; i < tokens_to_skip; i++) {
+		if (!p || !*p) {
+			return NULL;
+		}
+		p = wt_ble_skip_token_raw(p);
+	}
+
+	if (!p || !*p) {
+		return NULL;
+	}
+
+	return p;
+}
+
+static int wt_ble_build_payload_from_raw_tail(const char *tail, char *payload, size_t payload_size)
+{
+	char tail_buf[WT_BLE_CMD_TEXT_MAX];
+	char *tail_argv[12];
+	int tail_argc;
+
+	if (!tail || !*tail) {
+		return -EINVAL;
+	}
+
+	strncpy(tail_buf, tail, sizeof(tail_buf) - 1);
+	tail_buf[sizeof(tail_buf) - 1] = '\0';
+
+	tail_argc = wt_split_args_quoted(tail_buf, tail_argv, ARRAY_SIZE(tail_argv));
+	if (tail_argc < 0) {
+		return tail_argc;
+	}
+	if (tail_argc == 0) {
+		return -EINVAL;
+	}
+
+	return wt_build_payload_from_argv(0, tail_argc, tail_argv, payload, payload_size);
+}
+
 static int wt_ble_tx_uart_payload(char **argv, size_t argc, size_t payload_arg)
 {
 	int payload_len;
@@ -439,21 +531,27 @@ static int wt_ble_tx_uart_payload(char **argv, size_t argc, size_t payload_arg)
 	return payload_len;
 }
 
-static int wt_ble_command_tx(char **argv, size_t argc)
+static int wt_ble_command_tx(char **argv, size_t argc, const char *raw_line)
 {
 	int payload_len;
 	int ret;
 	char payload[WT_TX_PAYLOAD_MAX];
 
-	if (argc < 3) {
+	if (argc < 2) {
 		return wt_ble_rsp_send("usage tx ble <msg> | tx uart <msg> | tx wifi <ip> <port> <msg> | tx both <ip> <port> <msg>");
 	}
 
 	if (!strcmp(argv[1], "ble") || !strcmp(argv[1], "bt")) {
-		payload_len = wt_build_payload_from_argv(2, argc, argv,
+		if (argc >= 3) {
+			payload_len = wt_build_payload_from_argv(2, argc, argv,
 						 payload, sizeof(payload));
+		} else {
+			payload_len = wt_ble_build_payload_from_raw_tail(
+				wt_ble_raw_tx_tail(raw_line, 2), payload, sizeof(payload));
+		}
 		if (payload_len < 0) {
-			return wt_ble_rsp_send("err payload %d", payload_len);
+			return wt_ble_rsp_send("err payload %d argc %u raw %.64s",
+						payload_len, (unsigned int)argc, raw_line ? raw_line : "");
 		}
 
 		ret = wt_ble_transmit_payload((const uint8_t *)payload, payload_len);
@@ -471,9 +569,18 @@ static int wt_ble_command_tx(char **argv, size_t argc)
 	}
 
 	if (!strcmp(argv[1], "uart") || !strcmp(argv[1], "serial")) {
-		payload_len = wt_ble_tx_uart_payload(argv, argc, 2);
+		if (argc >= 3) {
+			payload_len = wt_ble_tx_uart_payload(argv, argc, 2);
+		} else {
+			payload_len = wt_ble_build_payload_from_raw_tail(
+				wt_ble_raw_tx_tail(raw_line, 2), payload, sizeof(payload));
+			if (payload_len > 0) {
+				printk("BLE UART TX: %s\r\n", payload);
+			}
+		}
 		if (payload_len < 0) {
-			return wt_ble_rsp_send("err uart payload %d", payload_len);
+			return wt_ble_rsp_send("err uart payload %d argc %u raw %.64s",
+						payload_len, (unsigned int)argc, raw_line ? raw_line : "");
 		}
 
 		return wt_ble_rsp_send("ok uart tx %d bytes", payload_len);
@@ -528,7 +635,7 @@ static int wt_ble_command_tx(char **argv, size_t argc)
 					      ret == -EACCES ? " (ble notify off)" : "");
 	}
 
-	return wt_ble_rsp_send("usage tx ble|uart|wifi|both ...");
+	return wt_ble_rsp_send("usage tx ble|uart|wifi|both ... argc %u subcmd %s raw %.64s", (unsigned int)argc, argc >= 2 ? argv[1] : "", raw_line ? raw_line : "");
 }
 
 static int wt_ble_command_wifi_cred(char **argv, size_t argc)
@@ -914,10 +1021,29 @@ static int wt_ble_command_execute(const char *line)
 	}
 
 	if (!strcmp(argv[0], "tx")) {
-		return wt_ble_command_tx(argv, argc);
+		return wt_ble_command_tx(argv, argc, line);
 	}
 
 	return wt_ble_rsp_send("err unknown command: %s", argv[0]);
+}
+
+static void wt_ble_cmd_work_handler(struct k_work *work)
+{
+	int ret;
+	char cmd[WT_BLE_CMD_TEXT_MAX];
+
+	ARG_UNUSED(work);
+
+	strncpy(cmd, ble_cmd_work_buf, sizeof(cmd) - 1);
+	cmd[sizeof(cmd) - 1] = '\0';
+
+	LOG_INF("BLE command executing: %s", cmd);
+	ret = wt_ble_command_execute(cmd);
+	if (ret) {
+		LOG_WRN("BLE command failed: %d", ret);
+	}
+
+	atomic_clear(&ble_cmd_work_busy);
 }
 
 static int wt_ble_status_notify_now(void)
@@ -1080,6 +1206,8 @@ void wt_ble_init(void)
 	k_work_init_delayable(&ble_status_ping_work, wt_ble_status_ping_work_handler);
 	k_work_init_delayable(&ble_adv_restart_work, wt_ble_adv_restart_work_handler);
 	k_work_init_delayable(&ble_self_stop_work, wt_ble_self_stop_work_handler);
+	k_work_init_delayable(&ble_cmd_work, wt_ble_cmd_work_handler);
+	atomic_clear(&ble_cmd_work_busy);
 }
 
 int wt_ble_service_start(void)

@@ -327,3 +327,36 @@ wifi status
 ```
 
 The included `BLE_Webapp` now has a scan helper that can populate the SSID field from scan results.
+
+
+## BLE command execution note
+
+BLE command writes are queued onto the Zephyr workqueue before execution. This keeps command handling and notifications out of the Bluetooth GATT write callback, which avoids lockups when a command immediately emits BLE TX notifications and command responses.
+
+
+## TX command quoting note
+
+TX payload examples in the webapp use quoted payloads now:
+
+```text
+tx ble "hello from the web console"
+tx uart "hello from BLE command console"
+tx wifi 192.168.1.50 5000 "hello over UDP"
+```
+
+The firmware joins remaining TX arguments into a payload, but quoting is still the safest form when sending through Web Bluetooth or copying commands between BLE, UART, and Wi-Fi.
+
+
+## BLE TX write-path fix
+
+Firmware version `0.3.3-ble-tx-writefix` debounces BLE command writes for a few milliseconds before dispatching. This keeps Web Bluetooth long/offset writes from executing a partial command like `tx ble` before the payload fragment arrives.
+
+
+## Parser fix note
+
+Firmware `0.3.4-parserfix` fixes the quoted-argument tokenizer so multi-word commands over BLE and Wi-Fi UDP parse correctly. This specifically fixes commands like:
+
+```text
+tx ble "hello from the web console"
+wifi cred set "My Home WiFi" "password with spaces" wpa2
+```
