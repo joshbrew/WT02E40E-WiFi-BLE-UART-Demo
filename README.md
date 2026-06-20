@@ -82,30 +82,30 @@ If your custom board is powered from its own regulator instead, do not blindly t
 The carrier overlay maps the indicators as:
 
 ```txt
-Blue LED   P1.07
-Green LED  P0.10
+LED0   P1.07
+LED1   P0.10
 ```
 
 Blink meanings:
 
 ```txt
-Blue blinking   Firmware alive, BLE active/advertising, no BLE client connected
-Blue solid      BLE client connected
-Green off       Wi-Fi off or not associated
-Green blinking  Wi-Fi associated, waiting for IPv4/DHCP
-Green solid     Wi-Fi connected and IPv4 bound
+LED0 blinking   Firmware alive, BLE active/advertising, no BLE client connected
+LED0 solid      BLE client connected
+LED1 off       Wi-Fi off or not associated
+LED1 blinking  Wi-Fi associated, waiting for IPv4/DHCP
+LED1 solid     Wi-Fi connected and IPv4 bound
 ```
 
 Normal first boot without a BLE client should be:
 
 ```txt
-Blue blinking, green off
+LED0 blinking, green off
 ```
 
 After connecting from a phone with nRF Connect:
 
 ```txt
-Blue solid, green off
+LED0 solid, green off
 ```
 
 ## UART shell pins
@@ -113,8 +113,8 @@ Blue solid, green off
 The app enables a UART shell on the carrier UART nets:
 
 ```txt
-nRF P1.04 UART_TX -> host PA23/RX1 net
-nRF P1.06 UART_RX -> host PA22/TX1 net
+nRF P1.04 UART_TX -> host RX net
+nRF P1.06 UART_RX -> host TX net
 GND               -> host/debug UART GND
 Baud              -> 115200 8N1
 ```
@@ -372,7 +372,7 @@ src/wt_wifi.c     Wi-Fi prep, connect loop, DHCP events, credentials, UDP TX
 src/wt_ble.c      BLE advertising, GATT TX/status/command characteristics
 src/wt_shell.c    UART/RTT wt commands
 src/wt_radio.c    Radio mode switching: idle, ble, wifi, both
-src/wt_leds.c     Blue/green LED status thread
+src/wt_leds.c     LED0/LED1 LED status thread
 src/wt_common.c   Shared parsing/helpers
 src/wt_config.h   App constants and local limits
 ```
@@ -429,7 +429,7 @@ WT02E40E-CMD
 
 Use the nRF Connect scanner, not the phone OS Bluetooth pairing screen.
 
-### Blue LED blinks forever
+### LED0 blinks forever
 
 That is normal when BLE is advertising and no BLE client is connected.
 
@@ -447,16 +447,16 @@ mode wifi
 wifi status
 ```
 
-### Green never lights
+### LED1 never lights
 
-Green is only for Wi-Fi state. With no Wi-Fi antenna, bad credentials, or Wi-Fi disabled, green may stay off forever.
+LED1 is only for Wi-Fi state. With no Wi-Fi antenna, bad credentials, or Wi-Fi disabled, green may stay off forever.
 
 Expected Wi-Fi LED states:
 
 ```txt
-Green off       Wi-Fi off or not associated
-Green blinking  Associated, waiting for IPv4
-Green solid     IPv4 bound
+LED1 off       Wi-Fi off or not associated
+LED1 blinking  Associated, waiting for IPv4
+LED1 solid     IPv4 bound
 ```
 
 ### UART shell does not respond
