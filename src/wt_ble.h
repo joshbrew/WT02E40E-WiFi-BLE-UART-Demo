@@ -12,6 +12,8 @@ bool wt_ble_is_connected(void);
 bool wt_ble_tx_notify_is_enabled(void);
 bool wt_ble_status_notify_is_enabled(void);
 bool wt_ble_cmd_response_notify_is_enabled(void);
+const char *wt_ble_name_get(void);
+int wt_ble_name_set(const char *name);
 
 void wt_ble_init(void);
 int wt_ble_service_start(void);

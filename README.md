@@ -24,6 +24,7 @@ There's an additional BLE_Webapp you can use for quick testing if the programmin
 - Provides the same command system over UART and RTT shell.
 - Lets the host switch radio mode at runtime: idle, BLE, Wi-Fi, or both.
 - Lets the host override Wi-Fi credentials at runtime.
+- Scans nearby APs and lets the host select a scanned SSID by index.
 - Sends UDP payloads over Wi-Fi when connected.
 - Sends payloads over BLE notifications when a client has enabled them.
 - Prints UART payloads received from BLE commands for host-side testing.
@@ -273,6 +274,9 @@ wt wifi on
 wt wifi off
 wt wifi status
 wt wifi reconnect
+wt wifi scan
+wt wifi scan json
+wt wifi scan last json
 wt wifi cred list
 wt wifi cred set <ssid> <password> [wpa2|auto|wpa3]
 wt wifi cred add <ssid> <password> [wpa2|auto|wpa3]
@@ -391,7 +395,21 @@ Current local limits are in `src/wt_config.h`:
 
 BLE TX, status notifications, and command responses use the negotiated ATT MTU dynamically. The app caps payload chunks at 255 bytes, so a 256-byte ATT MTU yields up to 253-byte ATT payload chunks. If a client stays at the default MTU, firmware falls back to 20-byte chunks.
 
-The command parser is intentionally simple: it splits on whitespace and does not handle quoted strings. For SSIDs or payloads with spaces, add quoting support later or avoid spaces during bring-up.
+The command parser now supports quoted arguments on the BLE command characteristic and Wi-Fi UDP command socket. UART/RTT shell parsing also accepts quoted arguments through the Zephyr shell. Use quotes for SSIDs, passwords, or positional arguments that contain spaces. Both double quotes and single quotes are supported, with backslash escapes inside quoted text.
+
+Examples:
+
+```txt
+wifi cred set "My Home WiFi" "correct horse battery staple" wpa2
+wifi cred add 'Lab WiFi' 'password with spaces' auto
+wifi cred open "Coffee Shop WiFi"
+wifi cred forget "My Home WiFi"
+tx ble "hello with spaces"
+tx uart "quote test: \"hello\""
+tx wifi 192.168.1.50 5000 "payload with spaces"
+```
+
+The transmit commands still treat everything after the fixed arguments as payload, so quotes are not required for ordinary payload spaces. Quotes are mainly important for positional fields like SSID and password.
 
 ## Source layout
 
@@ -510,7 +528,6 @@ If the terminal build succeeds but VS Code Problems still shows these, reset Int
 ## Notes before productizing
 
 - Add authentication or bonding before exposing BLE commands in a real deployment.
-- Add quoted-string parsing if SSIDs, passwords, or payloads need spaces.
 - Consider a structured binary/CBOR protocol instead of text commands for a host MCU.
 - Verify nRF7002 antenna, regulatory config, MAC address handling, and production credential storage.
 - Review power supply burst capacity before doing sustained Wi-Fi TX.
@@ -549,61 +566,245 @@ Wi-Fi command receive is enabled by default and can be controlled with:
 wifi cmd status
 wifi cmd on
 wifi cmd off
+wifi cmd port
+wifi cmd port 5002
 ```
 
-The board listens on UDP port `5001` once Wi-Fi has IPv4. The included `BLE_Webapp` Node server listens on UDP port `5000`, sends Wi-Fi command packets to the board, and streams board responses into the browser log.
+The board listens on UDP port `5001` once Wi-Fi has IPv4 by default. The command socket can be live-rebound at runtime with `wifi cmd port <port>`. The included `BLE_Webapp` Node server listens on UDP port `5000`, sends Wi-Fi command packets to the board, and streams board responses into the browser log.
 
-### Example: Send a UART message out over BLE
 
-This test sends a message from the UART/RTT shell on the WT02E40E and receives it on a BLE client.
+## Device identity, BLE renaming, and discovery
 
-1. Connect to the device over BLE.
+This build adds small identity/config commands so the webapp and host MCU can identify the board without hardcoded notes.
 
-   Device name:
+```text
+id
+version
+config
+config json
+status json
+```
 
-   ```txt
-   WT02E40E-CMD
-   ```
+The advertised BLE name can be changed at runtime from any command transport:
 
-2. Enable notifications on the BLE TX characteristic.
+```text
+ble name
+ble name set WT02E40E-CMD-01
+name set WT02E40E-CMD-01
+```
 
-   ```txt
-   TX notify UUID:
-   7f1c0002-2b5a-4f2d-9a31-d6a5f4e040e1
-   ```
+If the device is advertising, the firmware restarts advertising with the new name. If it is connected, the new name is used for the next advertising session. This is a runtime lab setting, not yet a saved production setting.
 
-   In the BLE webapp, click:
+Wi-Fi discovery beacons can be enabled once Wi-Fi has IPv4:
 
-   ```txt
-   Toggle BLE TX notifications
-   ```
+```text
+discovery status
+discovery on
+discovery off
+```
 
-   Make sure it shows:
+When enabled, the board broadcasts a small JSON discovery packet to UDP port `5000` every few seconds. The included Node webapp listens on that port and auto-fills the board IP/command port when it sees the packet.
 
-   ```txt
-   TX notify: on
-   ```
+Example discovery payload:
 
-3. Open the UART shell.
+```json
+{"type":"wt02e40e_discovery","name":"WT02E40E-CMD-01","fw":"0.3.1-udp-rebind","cmd_port":5001,"udp_rx_port":5000,"uptime_s":42}
+```
 
-   ```txt
-   Baud: 115200 8N1
-   ```
+`config save` persists the runtime BLE name and discovery setting through the Zephyr settings/NVS backend. Wi-Fi credentials persist through the Zephyr Wi-Fi credentials/settings backend. Radio mode is still selected by Kconfig at boot unless changed at runtime.
 
-   RTT shell also works if UART is not connected.
+## Full command feature pass
 
-4. Send a BLE TX message from UART.
+This build extends the command bridge so the device can be treated as a three-transport control node instead of only a BLE bring-up target.
 
-   ```txt
-   wt tx ble hello from uart
-   ```
+### Identity and structured status
 
-5. Confirm the BLE client receives it.
+```text
+id
+version
+config
+config json
+status
+status json
+ble status
+ble status json
+wifi status
+wifi status json
+fw status
+```
 
-   In the webapp log you should see:
+`id` and `config` include the advertised BLE name, firmware version, current mode, saved boot mode, Wi-Fi command port, discovery state, bridge settings, Wi-Fi IP/MAC when available, buffer limits, and uptime.
 
-   ```txt
-   TX <= hello from uart
-   ```
+### Saved app config
 
-If the UART command returns `-13` or says TX notify is off, the BLE client is connected but has not enabled notifications on the TX characteristic yet.
+```text
+boot status
+boot mode idle
+boot mode ble
+boot mode wifi
+boot mode both
+config save
+config reset
+```
+
+`config save` persists the BLE name, boot mode, discovery setting, Wi-Fi command-server enable state, and bridge settings through Zephyr settings/NVS. Wi-Fi credentials still use the Zephyr Wi-Fi credentials backend.
+
+### BLE renaming
+
+```text
+ble name
+ble name set "WT02E40E-CMD-01"
+name set "WT02E40E-CMD-01"
+config save
+```
+
+If the device is advertising, changing the BLE name restarts advertising with the new name. If it is connected, the new name is used the next time advertising starts.
+
+### Wi-Fi discovery
+
+```text
+discovery status
+discovery on
+discovery off
+```
+
+With Wi-Fi online and IPv4 bound, discovery broadcasts JSON to UDP port `5000`:
+
+```json
+{"type":"wt02e40e_discovery","name":"WT02E40E-CMD-01","fw":"0.3.1-udp-rebind","ip":"192.168.1.123","cmd_port":5001,"udp_rx_port":5000,"uptime_s":42}
+```
+
+The included `BLE_Webapp` listens for these beacons and auto-fills the board IP and command port.
+
+### Request IDs
+
+Prefix a command with an ID token to make async responses easier to match:
+
+```text
+#42 status
+#43 wifi status json
+```
+
+Responses preserve the prefix:
+
+```text
+#42 config name=...
+#43 {"wifi_requested":true,...}
+```
+
+### Delayed radio safety rails
+
+Commands that cut off their own transport can be delayed:
+
+```text
+ble off 5s
+wifi off 5s
+mode ble 5s
+mode wifi 5s
+mode idle 5s
+```
+
+From BLE, immediate `ble off`, `mode idle`, and `mode wifi` still answer first and then disconnect shortly after so the response can reach the browser/phone.
+
+### Bridge forwarding rules
+
+The bridge layer lets you configure common forwarding outputs once, then send payloads without spelling out every transport each time.
+
+```text
+bridge status
+bridge status json
+bridge target <ip> <port>
+bridge ble on
+bridge uart on
+bridge wifi on
+bridge all on
+bridge send "hello through enabled bridge outputs"
+bridge all "hello through enabled bridge outputs"
+config save
+```
+
+Defaults:
+
+```text
+bridge ble=on
+bridge uart=on
+bridge wifi=off
+bridge target=<unset>:5000
+```
+
+`bridge wifi on` requires a bridge target first, usually the Node server IP and UDP listener port.
+
+### Ping and latency tests
+
+```text
+ping
+ping uart
+ping ble
+ping wifi <ip> <port>
+```
+
+`ping ble` sends a BLE TX notification, so the BLE client must enable TX notifications first. `ping wifi` sends a UDP packet to the requested host/port.
+
+### Firmware/reboot hooks
+
+```text
+fw status
+fw reboot
+fw reboot 5s
+fw reboot bootloader 5s
+reboot
+reboot 5s
+```
+
+`fw reboot bootloader` is a placeholder hook in this bring-up build. It logs that bootloader reboot was requested and currently falls back to a cold reboot.
+
+### Three-way command bridge summary
+
+```text
+BLE command characteristic  -> command response characteristic
+UART/RTT shell              -> shell output
+Wi-Fi UDP command socket     -> UDP response packet
+```
+
+All three command paths share the same high-level grammar for identity, config, boot mode, BLE, Wi-Fi, discovery, bridge, ping, transmit, and firmware commands.
+
+
+## Live UDP command port rebind
+
+The Wi-Fi command listener port can be changed at runtime from UART, BLE, or the existing Wi-Fi command path:
+
+```text
+wifi cmd port          # show current command port
+wifi cmd port 5002     # rebind listener to UDP/5002
+config save            # persist across reboot
+```
+
+When the port changes, the command thread closes the old UDP socket and binds the new one on the next poll cycle. If the command was sent over Wi-Fi, the response is sent from the old socket first, then the listener moves to the new port. Discovery packets report the current `cmd_port`, and the Node webapp updates its board command port field from discovery.
+
+
+## Wi-Fi AP scanning
+
+This build can scan nearby Wi-Fi access points from UART, BLE, or the Wi-Fi UDP command path. Zephyr exposes scan requests through `NET_REQUEST_WIFI_SCAN` and returns individual scan-result events, which this app stores as a small latest-results table.
+
+```text
+wifi scan                         # start scan, wait, return compact text
+wifi scan json                    # start scan, wait, return JSON
+wifi scan start                   # start scan asynchronously
+wifi scan last                    # read previous scan as text
+wifi scan last json               # read previous scan as JSON
+wifi scan status                  # running/valid/count state
+wifi scan clear                   # clear cached scan results
+wifi scan connect <index> <password> [wpa2|auto|wpa3]
+wifi scan open <index>
+```
+
+Example flow from BLE or UART:
+
+```text
+wifi scan json
+wifi scan connect 1 "my password with spaces" wpa2
+wifi on
+wifi status
+```
+
+The included `BLE_Webapp` now has a scan helper that can populate the SSID field from scan results.

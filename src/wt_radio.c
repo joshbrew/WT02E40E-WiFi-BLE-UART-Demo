@@ -3,6 +3,7 @@
 
 #include <zephyr/logging/log.h>
 
+#include "wt_app.h"
 #include "wt_ble.h"
 #include "wt_radio.h"
 #include "wt_wifi.h"
@@ -41,13 +42,8 @@ int wt_radio_mode_apply(const char *mode)
 
 void wt_radio_apply_default_mode(void)
 {
-#if defined(CONFIG_WT02E40E_DEFAULT_IDLE)
-	(void)wt_radio_mode_apply("idle");
-#elif defined(CONFIG_WT02E40E_DEFAULT_WIFI)
-	(void)wt_radio_mode_apply("wifi");
-#elif defined(CONFIG_WT02E40E_DEFAULT_BOTH)
-	(void)wt_radio_mode_apply("both");
-#else
-	(void)wt_radio_mode_apply("ble");
-#endif
+	const char *mode = wt_app_boot_mode_get();
+
+	LOG_INF("Applying boot radio mode: %s", mode);
+	(void)wt_radio_mode_apply(mode);
 }

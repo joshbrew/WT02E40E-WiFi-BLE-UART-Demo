@@ -20,6 +20,7 @@ LOG_MODULE_REGISTER(wt_ble, CONFIG_LOG_DEFAULT_LEVEL);
 #endif
 
 #include "wt_ble.h"
+#include "wt_app.h"
 #include "wt_common.h"
 #include "wt_config.h"
 #include "wt_radio.h"
@@ -38,6 +39,8 @@ static bool ble_cmd_rsp_notify_enabled;
 static char ble_status_buf[WT_BLE_STATUS_TEXT_MAX];
 static char ble_cmd_buf[WT_BLE_CMD_TEXT_MAX];
 static char ble_cmd_rsp_buf[WT_BLE_CMD_RSP_TEXT_MAX];
+static char ble_current_req_id[24];
+static char ble_name[WT_BLE_NAME_MAX + 1] = CONFIG_BT_DEVICE_NAME;
 static struct k_work_delayable ble_status_ping_work;
 static struct k_work_delayable ble_adv_restart_work;
 static struct k_work_delayable ble_self_stop_work;
@@ -105,6 +108,47 @@ bool wt_ble_status_notify_is_enabled(void)
 bool wt_ble_cmd_response_notify_is_enabled(void)
 {
 	return ble_cmd_rsp_notify_enabled;
+}
+
+const char *wt_ble_name_get(void)
+{
+	return ble_name;
+}
+
+int wt_ble_name_set(const char *name)
+{
+	int ret = 0;
+	bool was_advertising;
+
+	if (!name || name[0] == '\0') {
+		return -EINVAL;
+	}
+
+	if (strlen(name) > WT_BLE_NAME_MAX) {
+		return -EMSGSIZE;
+	}
+
+	strncpy(ble_name, name, sizeof(ble_name) - 1);
+	ble_name[sizeof(ble_name) - 1] = '\0';
+
+#if defined(CONFIG_BT_DEVICE_NAME_DYNAMIC)
+	if (ble_ready) {
+		ret = bt_set_name(ble_name);
+		if (ret) {
+			LOG_WRN("bt_set_name failed: %d", ret);
+		}
+	}
+#endif
+
+	was_advertising = ble_advertising;
+	if (was_advertising) {
+		(void)bt_le_adv_stop();
+		ble_advertising = false;
+		(void)wt_ble_advertising_start();
+	}
+
+	LOG_INF("BLE name set to %s", ble_name);
+	return ret;
 }
 
 static void wt_ble_tx_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
@@ -259,12 +303,27 @@ static int wt_ble_notify_chunked(const struct bt_gatt_attr *attr,
 static int wt_ble_rsp_send(const char *fmt, ...)
 {
 	va_list args;
+	char temp[WT_BLE_CMD_RSP_TEXT_MAX];
 	int len;
 	int notify_ret = 0;
 
 	va_start(args, fmt);
-	len = vsnprintk(ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf), fmt, args);
+	len = vsnprintk(temp, sizeof(temp), fmt, args);
 	va_end(args);
+
+	if (len < 0) {
+		ble_cmd_rsp_buf[0] = '\0';
+		return len;
+	}
+
+	if (ble_current_req_id[0] != '\0' && temp[0] != '#') {
+		len = snprintk(ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf),
+			       "#%s %s", ble_current_req_id, temp);
+	} else {
+		strncpy(ble_cmd_rsp_buf, temp, sizeof(ble_cmd_rsp_buf) - 1);
+		ble_cmd_rsp_buf[sizeof(ble_cmd_rsp_buf) - 1] = '\0';
+		len = strlen(ble_cmd_rsp_buf);
+	}
 
 	if (len < 0) {
 		ble_cmd_rsp_buf[0] = '\0';
@@ -307,10 +366,6 @@ static const struct bt_data ble_ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 };
 
-static const struct bt_data ble_sd[] = {
-	BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
-};
-
 static int build_status_payload(char *buf, size_t size)
 {
 	const char *mode;
@@ -327,7 +382,8 @@ static int build_status_payload(char *buf, size_t size)
 	}
 
 	len = snprintk(buf, size,
-			"WT02E40E status: mode=%s ble=%s ready=%s conn=%s adv=%s tx_notify=%s status_notify=%s cmd_rsp_notify=%s wifi_req=%s wifi_assoc=%s ipv4=%s wifi_cmd=%s cmd_port=%u uptime=%llds",
+			"WT02E40E status: name=%s mode=%s ble=%s ready=%s conn=%s adv=%s tx_notify=%s status_notify=%s cmd_rsp_notify=%s wifi_req=%s wifi_assoc=%s ipv4=%s wifi_cmd=%s cmd_port=%u discovery=%s uptime=%llds",
+			wt_ble_name_get(),
 			mode,
 			wt_onoff_txt(ble_requested),
 			wt_onoff_txt(ble_ready),
@@ -341,6 +397,7 @@ static int build_status_payload(char *buf, size_t size)
 			wt_onoff_txt(wt_wifi_has_ipv4()),
 			wt_onoff_txt(wt_wifi_cmd_is_enabled()),
 			wt_wifi_cmd_port(),
+			wt_onoff_txt(wt_wifi_discovery_is_enabled()),
 			(long long)(k_uptime_get() / 1000));
 
 	if (len < 0) {
@@ -361,29 +418,6 @@ int wt_ble_status_format(char *buf, size_t size)
 	return build_status_payload(buf, size);
 }
 
-static int wt_ble_split_args(char *line, char **argv, size_t argv_max)
-{
-	char *p = line;
-	size_t argc = 0;
-
-	while (*p && argc < argv_max) {
-		while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-			*p++ = '\0';
-		}
-
-		if (!*p) {
-			break;
-		}
-
-		argv[argc++] = p;
-
-		while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
-			p++;
-		}
-	}
-
-	return (int)argc;
-}
 
 static int wt_ble_tx_uart_payload(char **argv, size_t argc, size_t payload_arg)
 {
@@ -569,7 +603,7 @@ static int wt_ble_command_wifi(char **argv, size_t argc)
 	int ret;
 
 	if (argc < 2) {
-		return wt_ble_rsp_send("usage wifi on|off|status|reconnect|cmd|cred");
+		return wt_ble_rsp_send("usage wifi on|off|status|reconnect|scan|cmd|cred");
 	}
 
 	if (!strcmp(argv[1], "on") || !strcmp(argv[1], "start")) {
@@ -578,13 +612,23 @@ static int wt_ble_command_wifi(char **argv, size_t argc)
 	}
 
 	if (!strcmp(argv[1], "off") || !strcmp(argv[1], "stop")) {
-		ret = wt_wifi_service_set(false);
-		return ret ? wt_ble_rsp_send("err wifi off %d", ret) : wt_ble_rsp_send("ok wifi off");
+		uint32_t delay_ms = 0;
+		if (argc >= 3) {
+			ret = wt_app_parse_delay_ms(argv[2], &delay_ms);
+			if (ret) {
+				return wt_ble_rsp_send("err wifi off delay %d", ret);
+			}
+		}
+		ret = wt_app_delayed_radio_apply("wifi_off", delay_ms);
+		if (ret) {
+			return wt_ble_rsp_send("err wifi off %d", ret);
+		}
+		return delay_ms ? wt_ble_rsp_send("ok wifi off scheduled %u ms", delay_ms) : wt_ble_rsp_send("ok wifi off");
 	}
 
 	if (!strcmp(argv[1], "status")) {
-		(void)build_status_payload(ble_status_buf, sizeof(ble_status_buf));
-		return wt_ble_rsp_send("%s", ble_status_buf);
+		(void)wt_app_wifi_status_format(ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf), argc >= 3 && !strcmp(argv[2], "json"));
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
 	}
 
 	if (!strcmp(argv[1], "reconnect")) {
@@ -593,6 +637,14 @@ static int wt_ble_command_wifi(char **argv, size_t argc)
 			ret = wt_wifi_service_set(true);
 		}
 		return ret ? wt_ble_rsp_send("err wifi reconnect %d", ret) : wt_ble_rsp_send("ok wifi reconnect");
+	}
+
+	if (!strcmp(argv[1], "scan") || !strcmp(argv[1], "apscan") || !strcmp(argv[1], "networks")) {
+		ret = wt_wifi_scan_command(argv, argc, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+		if (ret < 0) {
+			return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+		}
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
 	}
 
 	if (!strcmp(argv[1], "cmd") || !strcmp(argv[1], "command") || !strcmp(argv[1], "commands")) {
@@ -609,14 +661,27 @@ static int wt_ble_command_wifi(char **argv, size_t argc)
 			ret = wt_wifi_cmd_service_set(false);
 			return ret ? wt_ble_rsp_send("err wifi cmd off %d", ret) : wt_ble_rsp_send("ok wifi cmd off");
 		}
-		return wt_ble_rsp_send("usage wifi cmd on|off|status");
+		if (!strcmp(argv[2], "port")) {
+			uint16_t port;
+			if (argc < 4) {
+				return wt_ble_rsp_send("ok wifi cmd port %u", wt_wifi_cmd_port());
+			}
+			ret = wt_parse_udp_port(argv[3], &port);
+			if (ret) {
+				return wt_ble_rsp_send("err wifi cmd port %d", ret);
+			}
+			ret = wt_wifi_cmd_port_set(port);
+			return ret ? wt_ble_rsp_send("err wifi cmd port set %d", ret) :
+				     wt_ble_rsp_send("ok wifi cmd port %u", wt_wifi_cmd_port());
+		}
+		return wt_ble_rsp_send("usage wifi cmd on|off|status|port [port]");
 	}
 
 	if (!strcmp(argv[1], "cred") || !strcmp(argv[1], "creds")) {
 		return wt_ble_command_wifi_cred(argv, argc);
 	}
 
-	return wt_ble_rsp_send("usage wifi on|off|status|reconnect|cmd|cred");
+	return wt_ble_rsp_send("usage wifi on|off|status|reconnect|scan|cmd|cred");
 }
 
 static int wt_ble_command_execute(const char *line)
@@ -627,6 +692,8 @@ static int wt_ble_command_execute(const char *line)
 	int argc;
 	int ret;
 
+	ble_current_req_id[0] = '\0';
+
 	if (!line || strlen(line) == 0) {
 		return wt_ble_rsp_send("err empty command");
 	}
@@ -634,9 +701,22 @@ static int wt_ble_command_execute(const char *line)
 	strncpy(line_buf, line, sizeof(line_buf) - 1);
 	line_buf[sizeof(line_buf) - 1] = '\0';
 
-	argc = wt_ble_split_args(line_buf, argv_storage, ARRAY_SIZE(argv_storage));
-	if (argc <= 0) {
+	argc = wt_split_args_quoted(line_buf, argv_storage, ARRAY_SIZE(argv_storage));
+	if (argc < 0) {
+		return wt_ble_rsp_send("err parse %d; check quotes/escapes", argc);
+	}
+	if (argc == 0) {
 		return wt_ble_rsp_send("err empty command");
+	}
+
+	if (argv[0][0] == '#') {
+		strncpy(ble_current_req_id, &argv[0][1], sizeof(ble_current_req_id) - 1);
+		ble_current_req_id[sizeof(ble_current_req_id) - 1] = '\0';
+		argv++;
+		argc--;
+		if (argc <= 0) {
+			return wt_ble_rsp_send("err empty command after request id");
+		}
 	}
 
 	if (!strcmp(argv[0], "wt")) {
@@ -648,24 +728,123 @@ static int wt_ble_command_execute(const char *line)
 	}
 
 	if (!strcmp(argv[0], "help") || !strcmp(argv[0], "?")) {
-		return wt_ble_rsp_send("cmds: status, mode idle|ble|wifi|both, wifi on|off|status|cmd|cred, ble ..., tx ...");
+		return wt_ble_rsp_send("cmds: id, version, fw, config, boot, status [json], mode [delay], wifi, ble, discovery, bridge, ping, tx, reboot");
+	}
+
+	if (!strcmp(argv[0], "id")) {
+		(void)wt_app_id_format(ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+	}
+
+	if (!strcmp(argv[0], "version") || !strcmp(argv[0], "ver")) {
+		(void)wt_app_version_format(ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+	}
+
+	if (!strcmp(argv[0], "fw")) {
+		ret = wt_app_fw_command(argv, argc, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+	}
+
+	if (!strcmp(argv[0], "reboot")) {
+		char *fw_argv[4];
+		size_t fw_argc = 2;
+		fw_argv[0] = "fw";
+		fw_argv[1] = "reboot";
+		if (argc >= 2) { fw_argv[2] = argv[1]; fw_argc = 3; }
+		if (argc >= 3) { fw_argv[3] = argv[2]; fw_argc = 4; }
+		ret = wt_app_fw_command(fw_argv, fw_argc, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+	}
+
+	if (!strcmp(argv[0], "boot")) {
+		ret = wt_app_boot_command(argv, argc, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+	}
+
+	if (!strcmp(argv[0], "bridge")) {
+		ret = wt_app_bridge_command(argv, argc, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+	}
+
+	if (!strcmp(argv[0], "ping")) {
+		ret = wt_app_ping_execute(argv, argc, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+	}
+
+	if (!strcmp(argv[0], "config")) {
+		bool json = argc >= 2 && !strcmp(argv[1], "json");
+		if (argc >= 2 && !strcmp(argv[1], "save")) {
+			ret = wt_app_config_save();
+			return ret ? wt_ble_rsp_send("err config save %d", ret) : wt_ble_rsp_send("ok config saved");
+		}
+		if (argc >= 2 && !strcmp(argv[1], "reset")) {
+			ret = wt_app_config_reset();
+			return ret ? wt_ble_rsp_send("err config reset %d", ret) : wt_ble_rsp_send("ok config reset");
+		}
+		(void)wt_app_config_format(ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf), json);
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+	}
+
+	if (!strcmp(argv[0], "discovery") || !strcmp(argv[0], "discover")) {
+		if (argc < 2 || !strcmp(argv[1], "status")) {
+			return wt_ble_rsp_send("ok discovery %s port %u interval %ums", wt_onoff_txt(wt_wifi_discovery_is_enabled()), WT_WIFI_DISCOVERY_UDP_PORT, WT_WIFI_DISCOVERY_INTERVAL_MS);
+		}
+		if (!strcmp(argv[1], "on") || !strcmp(argv[1], "start")) {
+			ret = wt_wifi_discovery_service_set(true);
+			return ret ? wt_ble_rsp_send("err discovery on %d", ret) : wt_ble_rsp_send("ok discovery on port %u", WT_WIFI_DISCOVERY_UDP_PORT);
+		}
+		if (!strcmp(argv[1], "off") || !strcmp(argv[1], "stop")) {
+			ret = wt_wifi_discovery_service_set(false);
+			return ret ? wt_ble_rsp_send("err discovery off %d", ret) : wt_ble_rsp_send("ok discovery off");
+		}
+		return wt_ble_rsp_send("usage discovery on|off|status");
+	}
+
+	if (!strcmp(argv[0], "name")) {
+		if (argc < 2 || !strcmp(argv[1], "get")) {
+			return wt_ble_rsp_send("ok name %s", wt_ble_name_get());
+		}
+		if (!strcmp(argv[1], "set")) {
+			if (argc < 3) {
+				return wt_ble_rsp_send("usage name set <ble-name>");
+			}
+			ret = wt_ble_name_set(argv[2]);
+			return ret ? wt_ble_rsp_send("err name set %d", ret) : wt_ble_rsp_send("ok name %s", wt_ble_name_get());
+		}
+		return wt_ble_rsp_send("usage name get|set <ble-name>");
 	}
 
 	if (!strcmp(argv[0], "status")) {
+		if (argc >= 2 && !strcmp(argv[1], "json")) {
+			(void)wt_app_config_format(ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf), true);
+			return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+		}
 		(void)build_status_payload(ble_status_buf, sizeof(ble_status_buf));
 		return wt_ble_rsp_send("%s", ble_status_buf);
 	}
 
 	if (!strcmp(argv[0], "mode")) {
+		uint32_t delay_ms = 0;
+
 		if (argc < 2) {
-			return wt_ble_rsp_send("usage mode idle|ble|wifi|both");
+			return wt_ble_rsp_send("usage mode idle|ble|wifi|both [delay]");
 		}
 
-		/*
-		 * If a BLE-origin command turns BLE off, answer first and then drop
-		 * the link from a delayed work item. Otherwise the connection can die
-		 * before the command response notification reaches the browser/phone.
-		 */
+		if (argc >= 3) {
+			ret = wt_app_parse_delay_ms(argv[2], &delay_ms);
+			if (ret) {
+				return wt_ble_rsp_send("err mode delay %d", ret);
+			}
+		}
+
+		if (delay_ms > 0) {
+			ret = wt_app_delayed_radio_apply(argv[1], delay_ms);
+			return ret ? wt_ble_rsp_send("err mode %d", ret) :
+				     wt_ble_rsp_send("ok mode %s scheduled %u ms", argv[1], delay_ms);
+		}
+
+		/* If a BLE-origin command turns BLE off, answer first and then drop the link. */
 		if (!strcmp(argv[1], "idle") || !strcmp(argv[1], "off")) {
 			ret = wt_wifi_service_set(false);
 			if (ret) {
@@ -692,20 +871,46 @@ static int wt_ble_command_execute(const char *line)
 
 	if (!strcmp(argv[0], "ble") || !strcmp(argv[0], "bt")) {
 		if (argc < 2) {
-			return wt_ble_rsp_send("usage ble on|off|status");
+			return wt_ble_rsp_send("usage ble on|off|status|name [get|set <name>]");
+		}
+		if (!strcmp(argv[1], "name")) {
+			if (argc < 3 || !strcmp(argv[2], "get")) {
+				return wt_ble_rsp_send("ok ble name %s", wt_ble_name_get());
+			}
+			if (!strcmp(argv[2], "set")) {
+				if (argc < 4) {
+					return wt_ble_rsp_send("usage ble name set <name>");
+				}
+				ret = wt_ble_name_set(argv[3]);
+				return ret ? wt_ble_rsp_send("err ble name set %d", ret) : wt_ble_rsp_send("ok ble name %s", wt_ble_name_get());
+			}
+			ret = wt_ble_name_set(argv[2]);
+			return ret ? wt_ble_rsp_send("err ble name set %d", ret) : wt_ble_rsp_send("ok ble name %s", wt_ble_name_get());
 		}
 		if (!strcmp(argv[1], "on") || !strcmp(argv[1], "start")) {
 			ret = wt_ble_service_start();
 			return ret ? wt_ble_rsp_send("err ble on %d", ret) : wt_ble_rsp_send("ok ble on");
 		}
 		if (!strcmp(argv[1], "off") || !strcmp(argv[1], "stop")) {
+			uint32_t delay_ms = 0;
+			if (argc >= 3) {
+				ret = wt_app_parse_delay_ms(argv[2], &delay_ms);
+				if (ret) {
+					return wt_ble_rsp_send("err ble off delay %d", ret);
+				}
+			}
+			if (delay_ms > 0) {
+				ret = wt_app_delayed_radio_apply("ble_off", delay_ms);
+				return ret ? wt_ble_rsp_send("err ble off %d", ret) :
+					     wt_ble_rsp_send("ok ble off scheduled %u ms", delay_ms);
+			}
 			return wt_ble_schedule_self_stop_response("ok ble off; disconnecting");
 		}
 		if (!strcmp(argv[1], "status")) {
-			(void)build_status_payload(ble_status_buf, sizeof(ble_status_buf));
-			return wt_ble_rsp_send("%s", ble_status_buf);
+			(void)wt_app_ble_status_format(ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf), argc >= 3 && !strcmp(argv[2], "json"));
+			return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
 		}
-		return wt_ble_rsp_send("usage ble on|off|status");
+		return wt_ble_rsp_send("usage ble on|off|status|name [get|set <name>]");
 	}
 
 	if (!strcmp(argv[0], "tx")) {
@@ -777,6 +982,11 @@ static int wt_ble_advertising_start(void)
 		return 0;
 	}
 
+	const char *name = wt_ble_name_get();
+	struct bt_data ble_sd[] = {
+		BT_DATA(BT_DATA_NAME_COMPLETE, name, strlen(name)),
+	};
+
 	ret = bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, ble_ad, ARRAY_SIZE(ble_ad),
 				 ble_sd, ARRAY_SIZE(ble_sd));
 	if (ret == -EALREADY) {
@@ -790,7 +1000,7 @@ static int wt_ble_advertising_start(void)
 	}
 
 	ble_advertising = true;
-	LOG_INF("BLE advertising as %s", CONFIG_BT_DEVICE_NAME);
+	LOG_INF("BLE advertising as %s", wt_ble_name_get());
 	return 0;
 }
 
@@ -888,6 +1098,9 @@ int wt_ble_service_start(void)
 			return ret;
 		}
 		ble_ready = true;
+#if defined(CONFIG_BT_DEVICE_NAME_DYNAMIC)
+		(void)bt_set_name(ble_name);
+#endif
 		LOG_INF("Bluetooth initialized");
 	}
 
@@ -980,6 +1193,17 @@ bool wt_ble_status_notify_is_enabled(void)
 bool wt_ble_cmd_response_notify_is_enabled(void)
 {
 	return false;
+}
+
+const char *wt_ble_name_get(void)
+{
+	return CONFIG_BT_DEVICE_NAME;
+}
+
+int wt_ble_name_set(const char *name)
+{
+	ARG_UNUSED(name);
+	return -ENOTSUP;
 }
 
 void wt_ble_init(void)

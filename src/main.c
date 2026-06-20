@@ -14,6 +14,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 
+#include "wt_app.h"
 #include "wt_ble.h"
 #include "wt_leds.h"
 #include "wt_radio.h"
@@ -45,6 +46,11 @@ int main(void)
 	LOG_ERR("CONFIG_WIFI_READY_LIB is required for this command sample");
 	return -ENOTSUP;
 #endif
+
+	ret = wt_app_settings_init();
+	if (ret) {
+		LOG_WRN("App settings load skipped/failed: %d", ret);
+	}
 
 	k_sleep(K_SECONDS(1));
 	wt_radio_apply_default_mode();

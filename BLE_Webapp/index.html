@@ -305,7 +305,7 @@
 
       <label>
         Command
-        <textarea id="commandInput" spellcheck="false" placeholder="status&#10;mode both&#10;wifi cred set testwifi testpassword123&#10;wifi on&#10;tx wifi 192.168.1.50 5000 hello over udp"></textarea>
+        <textarea id="commandInput" spellcheck="false" placeholder="status&#10;mode both&#10;wifi cred set &quot;My WiFi&quot; &quot;my password with spaces&quot; wpa2&#10;wifi on&#10;tx wifi 192.168.1.50 5000 &quot;hello over udp&quot;"></textarea>
       </label>
 
       <div class="row">
@@ -342,6 +342,7 @@
         <button class="quickCmd" data-cmd="mode both" disabled>mode both</button>
         <button class="quickCmd" data-cmd="ble status" disabled>ble status</button>
         <button class="quickCmd" data-cmd="wifi status" disabled>wifi status</button>
+        <button class="quickCmd" data-cmd="wifi scan json" disabled>wifi scan</button>
         <button class="quickCmd" data-cmd="wifi cred list" disabled>wifi cred list</button>
       </div>
 
@@ -349,11 +350,11 @@
       <div class="stack">
         <label>
           SSID
-          <input id="ssidInput" autocomplete="off" placeholder="testwifi">
+          <input id="ssidInput" autocomplete="off" placeholder="My WiFi">
         </label>
         <label>
           Password
-          <input id="passwordInput" type="password" autocomplete="off" placeholder="testpassword123">
+          <input id="passwordInput" type="password" autocomplete="off" placeholder="my password with spaces">
         </label>
         <div class="three">
           <label>
@@ -366,6 +367,26 @@
           </label>
           <span></span>
           <button id="setCredBtn" disabled>Set creds</button>
+        </div>
+      </div>
+
+      <h2>Wi-Fi network scan helper</h2>
+      <div class="stack">
+        <div class="small">
+          Scans nearby APs from the WT02E40E and fills the SSID helper. Use BLE scan before Wi-Fi is connected, or Wi-Fi-command scan after the board has an IP.
+        </div>
+        <div class="row">
+          <button id="scanWifiBleBtn" disabled>Scan networks over BLE</button>
+          <button id="scanWifiUdpBtn">Scan over Wi-Fi command</button>
+          <button id="scanLastBtn" disabled>Read last scan</button>
+        </div>
+        <label>
+          Scan results
+          <select id="scanSsidSelect"></select>
+        </label>
+        <div class="row">
+          <button id="useScannedSsidBtn">Use selected SSID</button>
+          <button id="connectScannedSsidBtn" disabled>Set selected creds + Wi-Fi on</button>
         </div>
       </div>
 
@@ -389,7 +410,7 @@
       <h2>Wi-Fi command channel</h2>
       <div class="stack">
         <div class="small">
-          Send commands to the WT02E40E over Wi-Fi UDP. Firmware listens on command port <strong id="boardCmdPortLabel">5001</strong> and replies back to this Node page.
+          Send commands to the WT02E40E over Wi-Fi UDP. Firmware listens on command port <strong id="boardCmdPortLabel">5001</strong> and replies back to this Node page. Change the board port with <code>wifi cmd port &lt;port&gt;</code>.
         </div>
         <div class="three">
           <label>
@@ -410,6 +431,7 @@
           <button id="copyBleCmdToWifiBtn">Copy BLE command here</button>
           <button id="useSelectedTemplateWifiBtn">Use selected template</button>
           <button id="wifiCmdStatusBtn">wifi cmd status</button>
+          <button id="setBoardCmdPortBtn" disabled>Set board cmd port over BLE</button>
         </div>
       </div>
 
@@ -443,18 +465,44 @@
         <button id="clearUdpBtn">Clear server UDP log</button>
       </div>
 
+      <h2>Bring-up wizard</h2>
+      <details open>
+        <summary>Suggested first pass</summary>
+        <ol class="cmdList">
+          <li>Connect BLE and enable command response notifications.</li>
+          <li>Run <code>id</code> and <code>config json</code>.</li>
+          <li>Set Wi-Fi credentials: <code>wifi cred set "Your SSID" "Your Password" wpa2</code>.</li>
+          <li>Run <code>mode both</code>, <code>wifi on</code>, and <code>wifi status json</code>.</li>
+          <li>Run <code>discovery on</code> and wait for the Board IP field to auto-fill.</li>
+          <li>Test Wi-Fi command receive with <code>#1 status</code> in the Wi-Fi command panel.</li>
+          <li>Set bridge target with <code>bridge target HOST_IP 5000</code>, then test <code>bridge send "hello bridge"</code>.</li>
+          <li>Finish by running <code>config save</code> if the name/boot/discovery/bridge settings should persist.</li>
+        </ol>
+      </details>
+
       <h2>Command reference</h2>
       <details open>
         <summary>All supported command shapes</summary>
         <ul class="cmdList">
-          <li><code>status</code> or <code>wt status</code>, prints full mode/BLE/Wi-Fi uptime status.</li>
+          <li><code>status</code> or <code>wt status</code>, prints full mode/BLE/Wi-Fi uptime status. <code>status json</code> returns structured JSON-ish state.</li>
+          <li><code>id</code>, <code>version</code>, <code>config</code>, <code>config json</code>, print device identity, firmware version, and runtime config.</li>
           <li><code>mode idle</code>, disables BLE advertising and Wi-Fi request state. From BLE, this responds first and then disconnects.</li>
           <li><code>mode ble</code>, BLE only. This is the default boot mode.</li>
           <li><code>mode wifi</code>, Wi-Fi only.</li>
           <li><code>mode both</code>, BLE plus Wi-Fi.</li>
           <li><code>ble on</code>, <code>ble off</code>, <code>ble status</code>. From BLE, <code>ble off</code> responds first and then disconnects.</li>
+          <li><code>ble name</code>, <code>ble name set &lt;name&gt;</code>, or top-level <code>name set &lt;name&gt;</code>, changes the advertised BLE name at runtime.</li>
           <li><code>wifi on</code>, <code>wifi off</code>, <code>wifi status</code>, <code>wifi reconnect</code>.</li>
-          <li><code>wifi cmd on</code>, <code>wifi cmd off</code>, <code>wifi cmd status</code>, controls the UDP command listener, default port 5001.</li>
+          <li><code>wifi scan</code>, <code>wifi scan json</code>, <code>wifi scan start</code>, <code>wifi scan last [json]</code>, scans nearby APs.</li>
+          <li><code>wifi scan connect &lt;index&gt; &lt;password&gt; [wpa2|auto|wpa3]</code> and <code>wifi scan open &lt;index&gt;</code>, use a scan result to configure credentials.</li>
+          <li><code>wifi cmd on</code>, <code>wifi cmd off</code>, <code>wifi cmd status</code>, and <code>wifi cmd port [port]</code>, controls and live-rebinds the UDP command listener.</li>
+          <li><code>discovery on</code>, <code>discovery off</code>, <code>discovery status</code>, controls UDP discovery beacons to port 5000.</li>
+          <li><code>boot status</code>, <code>boot mode &lt;idle|ble|wifi|both&gt;</code>, controls saved boot radio mode. Use <code>config save</code> to persist.</li>
+          <li><code>bridge status</code>, <code>bridge target &lt;ip&gt; &lt;port&gt;</code>, <code>bridge ble|uart|wifi|all on|off</code>, <code>bridge send &lt;msg&gt;</code>, controls bridge forwarding rules.</li>
+          <li><code>ping</code>, <code>ping uart</code>, <code>ping ble</code>, <code>ping wifi &lt;ip&gt; &lt;port&gt;</code>, tests latency/control paths.</li>
+          <li><code>fw status</code>, <code>fw reboot [delay]</code>, <code>fw reboot bootloader [delay]</code>, firmware/reboot hooks.</li>
+          <li>Optional request IDs: prefix a command with <code>#42</code>, for example <code>#42 status</code>. Responses preserve the ID.</li>
+          <li>Delayed radio cutoff: <code>ble off 5s</code>, <code>wifi off 5s</code>, <code>mode ble 5s</code>.</li>
           <li><code>wifi cred list</code>, lists stored runtime credentials.</li>
           <li><code>wifi cred set &lt;ssid&gt; &lt;password&gt; [wpa2|auto|wpa3]</code>, clears runtime credentials and stores/selects one secured network.</li>
           <li><code>wifi cred add &lt;ssid&gt; &lt;password&gt; [wpa2|auto|wpa3]</code>, adds another secured network.</li>
@@ -465,6 +513,19 @@
           <li><code>tx uart &lt;message&gt;</code>, writes a message to the firmware UART TX path.</li>
           <li><code>tx wifi &lt;ipv4&gt; &lt;port&gt; &lt;message&gt;</code>, sends a UDP packet over Wi-Fi.</li>
           <li><code>tx both &lt;ipv4&gt; &lt;port&gt; &lt;message&gt;</code>, sends using the combined TX path implemented in firmware.</li>
+          <li>Arguments can be quoted with <code>"..."</code> or <code>'...'</code>. Use backslash escapes for quotes/backslashes inside an argument.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary>Quoted argument examples</summary>
+        <ul class="cmdList">
+          <li><code>wifi cred set "My Home WiFi" "correct horse battery staple" wpa2</code></li>
+          <li><code>wifi cred open "Coffee Shop WiFi"</code></li>
+          <li><code>wifi cred forget "My Home WiFi"</code></li>
+          <li><code>tx ble "hello with spaces"</code></li>
+          <li><code>tx wifi 192.168.1.50 5000 "payload with spaces"</code></li>
+          <li><code>tx uart "quote test: \"hello\""</code></li>
         </ul>
       </details>
 
@@ -482,7 +543,7 @@
   <script>
     "use strict";
 
-    const WEBAPP_VERSION = "2026-06-20-radio-toggle-v6";
+    const WEBAPP_VERSION = "2026-06-20-wifi-scan-v11";
 
     const UUIDS = {
       service: "7f1c0001-2b5a-4f2d-9a31-d6a5f4e040e1",
@@ -496,23 +557,48 @@
       { group: "Status", name: "Full status", cmd: "status", desc: "Read firmware status through the command response characteristic." },
       { group: "Status", name: "BLE status", cmd: "ble status", desc: "Check BLE advertising/connection state." },
       { group: "Status", name: "Wi-Fi status", cmd: "wifi status", desc: "Check Wi-Fi request/association/IP state." },
+      { group: "Status", name: "Device identity", cmd: "id", desc: "Read compact identity: BLE name, firmware, ports, mode, uptime." },
+      { group: "Status", name: "Firmware version", cmd: "version", desc: "Read firmware/build version and key limits." },
+      { group: "Status", name: "Config text", cmd: "config", desc: "Read current runtime config as text." },
+      { group: "Status", name: "Config JSON", cmd: "config json", desc: "Read current runtime config as JSON for tooling." },
+      { group: "Status", name: "BLE status JSON", cmd: "ble status json", desc: "Structured BLE-only status." },
+      { group: "Status", name: "Wi-Fi status JSON", cmd: "wifi status json", desc: "Structured Wi-Fi-only status." },
+      { group: "Status", name: "Request ID test", cmd: "#42 status", desc: "Command ID prefix. Response should start with #42." },
+      { group: "Config", name: "Boot mode status", cmd: "boot status", desc: "Show saved boot radio mode." },
+      { group: "Config", name: "Boot to BLE", cmd: "boot mode ble\nconfig save", desc: "Persist BLE-only boot mode." },
+      { group: "Config", name: "Boot to both", cmd: "boot mode both\nconfig save", desc: "Persist BLE + Wi-Fi boot mode." },
+      { group: "Config", name: "Save config", cmd: "config save", desc: "Persist BLE name, boot mode, discovery, Wi-Fi command state, and bridge settings." },
+      { group: "Config", name: "Reset config", cmd: "config reset", desc: "Reset persisted app config to compile-time defaults." },
 
       { group: "Modes", name: "Idle mode", cmd: "mode idle", desc: "Disable active radio modes." },
       { group: "Modes", name: "BLE only", cmd: "mode ble", desc: "BLE command/status mode, no Wi-Fi request." },
       { group: "Modes", name: "Wi-Fi only", cmd: "mode wifi", desc: "Wi-Fi mode without BLE staying intentionally active. From BLE, this will disconnect BLE after response." },
       { group: "Modes", name: "Wi-Fi only, BLE off", cmd: "mode wifi", desc: "Turn Wi-Fi on and turn BLE off. Use UART or Wi-Fi command to turn BLE back on." },
       { group: "Modes", name: "BLE + Wi-Fi", cmd: "mode both", desc: "Keep BLE command channel available while Wi-Fi runs." },
+      { group: "Modes", name: "BLE off in 5s", cmd: "ble off 5s", desc: "Schedule BLE off with a safety delay." },
+      { group: "Modes", name: "Wi-Fi off in 5s", cmd: "wifi off 5s", desc: "Schedule Wi-Fi off with a safety delay." },
+      { group: "Modes", name: "Mode BLE in 5s", cmd: "mode ble 5s", desc: "Schedule BLE-only mode after a delay." },
 
       { group: "BLE", name: "BLE on", cmd: "ble on", desc: "Start BLE advertising if not connected." },
       { group: "BLE", name: "BLE off", cmd: "ble off", desc: "Stop BLE from any transport. From BLE, response is sent first, then the link disconnects." },
+      { group: "BLE", name: "BLE name get", cmd: "ble name", desc: "Read the current BLE advertised name." },
+      { group: "BLE", name: "BLE name set", cmd: "ble name set WT02E40E-CMD-01", desc: "Rename the BLE advertised connection name at runtime." },
       { group: "BLE", name: "BLE TX test", cmd: "tx ble hello from the web console", desc: "Notify a BLE TX message to subscribed clients." },
 
       { group: "Wi-Fi", name: "Wi-Fi on", cmd: "wifi on", desc: "Start Wi-Fi connection using stored or compiled credentials." },
       { group: "Wi-Fi", name: "Wi-Fi off", cmd: "wifi off", desc: "Stop Wi-Fi request state." },
       { group: "Wi-Fi", name: "Wi-Fi reconnect", cmd: "wifi reconnect", desc: "Restart Wi-Fi connection attempt." },
+      { group: "Wi-Fi", name: "Scan networks", cmd: "wifi scan", desc: "Scan nearby Wi-Fi networks and return a compact text list." },
+      { group: "Wi-Fi", name: "Scan networks JSON", cmd: "wifi scan json", desc: "Scan nearby Wi-Fi networks and return structured JSON for the webapp." },
+      { group: "Wi-Fi", name: "Last scan JSON", cmd: "wifi scan last json", desc: "Read the last scan result without starting a new scan." },
+      { group: "Wi-Fi", name: "Connect scan result", cmd: "wifi scan connect 1 YOUR_PASSWORD wpa2", desc: "Use scan result #1 with the password helper, then start Wi-Fi." },
       { group: "Wi-Fi", name: "Wi-Fi command status", cmd: "wifi cmd status", desc: "Check the UDP command listener state/port." },
       { group: "Wi-Fi", name: "Wi-Fi command on", cmd: "wifi cmd on", desc: "Enable UDP command receive on the board." },
       { group: "Wi-Fi", name: "Wi-Fi command off", cmd: "wifi cmd off", desc: "Disable UDP command receive on the board." },
+      { group: "Wi-Fi", name: "Wi-Fi command port", cmd: "wifi cmd port 5001", desc: "Live-rebind the board UDP command listener port." },
+      { group: "Wi-Fi", name: "Discovery status", cmd: "discovery status", desc: "Check UDP discovery beacon state." },
+      { group: "Wi-Fi", name: "Discovery on", cmd: "discovery on", desc: "Broadcast device identity to Node UDP port 5000 every few seconds." },
+      { group: "Wi-Fi", name: "Discovery off", cmd: "discovery off", desc: "Stop discovery broadcasts." },
       { group: "Wi-Fi", name: "List credentials", cmd: "wifi cred list", desc: "List runtime Wi-Fi credentials known to firmware." },
       { group: "Wi-Fi", name: "Set secured Wi-Fi", cmd: "wifi cred set YOUR_SSID YOUR_PASSWORD wpa2", desc: "Replace runtime credentials with one WPA2 network." },
       { group: "Wi-Fi", name: "Add secured Wi-Fi", cmd: "wifi cred add YOUR_SSID YOUR_PASSWORD auto", desc: "Add another runtime credential without clearing all." },
@@ -523,6 +609,18 @@
       { group: "Transmit", name: "UART TX", cmd: "tx uart hello from BLE command console", desc: "Send text out the firmware UART TX path." },
       { group: "Transmit", name: "Wi-Fi UDP TX", cmd: "tx wifi HOST_IP 5000 hello from WT02E40E over UDP", desc: "Send a UDP packet from the board to a target IPv4/port." },
       { group: "Transmit", name: "Combined TX", cmd: "tx both HOST_IP 5000 hello over the combined transmit path", desc: "Use the firmware combined transmit command." },
+
+      { group: "Bridge", name: "Bridge status", cmd: "bridge status", desc: "Show enabled bridge outputs and Wi-Fi bridge target." },
+      { group: "Bridge", name: "Bridge target this page", cmd: "bridge target HOST_IP 5000", desc: "Set the bridge Wi-Fi target to this Node page." },
+      { group: "Bridge", name: "Bridge Wi-Fi on", cmd: "bridge wifi on", desc: "Enable bridge forwarding to the configured Wi-Fi target." },
+      { group: "Bridge", name: "Bridge all on", cmd: "bridge all on", desc: "Enable BLE, UART, and Wi-Fi bridge outputs." },
+      { group: "Bridge", name: "Bridge send", cmd: "bridge send hello over configured bridge outputs", desc: "Send one payload through enabled bridge outputs." },
+      { group: "Ping", name: "Ping local", cmd: "ping", desc: "Basic command round-trip ping." },
+      { group: "Ping", name: "Ping BLE TX", cmd: "ping ble", desc: "Send a ping over BLE TX notify if subscribed." },
+      { group: "Ping", name: "Ping Wi-Fi to this page", cmd: "ping wifi HOST_IP 5000", desc: "Send a UDP ping to this Node page." },
+      { group: "Firmware", name: "Firmware status", cmd: "fw status", desc: "Read firmware/reboot capability status." },
+      { group: "Firmware", name: "Reboot in 5s", cmd: "fw reboot 5s", desc: "Schedule a cold reboot." },
+      { group: "Firmware", name: "Bootloader reboot placeholder", cmd: "fw reboot bootloader 5s", desc: "Placeholder command; currently falls back to cold reboot." },
 
       { group: "Bring-up", name: "Configure and enable Wi-Fi", cmd: "mode both\nwifi cred set YOUR_SSID YOUR_PASSWORD wpa2\nwifi on\nwifi cmd on\nwifi status", desc: "Common bring-up sequence with BLE and Wi-Fi command server available." },
       { group: "Bring-up", name: "Send board UDP to this page", cmd: "tx wifi HOST_IP 5000 hello from WT02E40E over UDP", desc: "Use Node's UDP listener as the packet target." },
@@ -538,6 +636,14 @@
       "Configure and enable Wi-Fi",
       "Send board UDP to this page",
       "Wi-Fi command status",
+      "Scan networks JSON",
+      "Discovery on",
+      "BLE name set",
+      "Device identity",
+      "Request ID test",
+      "Bridge status",
+      "Ping local",
+      "Firmware status",
       "UART TX",
       "BLE TX test",
       "BLE off"
@@ -564,7 +670,10 @@
       lastResponseText: "",
       lastResponseAt: 0,
       config: null,
-      events: null
+      events: null,
+      scanResults: [],
+      pendingJsonResponse: "",
+      pendingJsonAt: 0
     };
 
     const encoder = new TextEncoder();
@@ -577,10 +686,12 @@
       "statusSubBtn", "responseSubBtn", "txSubBtn", "commandInput", "sendCommandBtn",
       "clearCommandBtn", "insertTemplateBtn", "templateSelect", "templateDescription",
       "sendTemplateBtn", "commonTemplateButtons", "ssidInput", "passwordInput",
-      "securityInput", "setCredBtn", "udpPort", "hostIpSelect", "wifiMessageInput",
+      "securityInput", "setCredBtn", "scanWifiBleBtn", "scanWifiUdpBtn", "scanLastBtn",
+      "scanSsidSelect", "useScannedSsidBtn", "connectScannedSsidBtn",
+      "udpPort", "hostIpSelect", "wifiMessageInput",
       "boardCmdPortLabel", "boardIpInput", "boardCmdPortInput", "wifiCommandInput",
       "sendWifiCommandBtn", "copyBleCmdToWifiBtn", "useSelectedTemplateWifiBtn", "wifiCmdStatusBtn",
-      "makeWifiTxBtn", "udpTargetHost", "udpTargetPort", "udpSendText", "sendUdpBtn",
+      "setBoardCmdPortBtn", "makeWifiTxBtn", "udpTargetHost", "udpTargetPort", "udpSendText", "sendUdpBtn",
       "log", "clearLogBtn", "copyLogBtn", "clearUdpBtn"
     ]) {
       el[id] = document.getElementById(id);
@@ -623,14 +734,56 @@
       log(`STATUS <= ${cleaned}`, "status");
     }
 
+    function stripRequestId(text) {
+      return String(text || "").replace(/^#\S+\s+/, "").trim();
+    }
+
+    function tryParseJsonResponse(text) {
+      const cleaned = stripRequestId(text);
+      if (!cleaned.startsWith("{")) {
+        return null;
+      }
+      try {
+        return JSON.parse(cleaned);
+      } catch (_) {
+        return undefined;
+      }
+    }
+
     function logResponseText(text) {
       const now = performance.now();
+      const parsedDirect = tryParseJsonResponse(text);
+
+      if (state.pendingJsonResponse) {
+        state.pendingJsonResponse += text;
+        const parsedPending = tryParseJsonResponse(state.pendingJsonResponse);
+        if (parsedPending && parsedPending !== undefined) {
+          const full = state.pendingJsonResponse;
+          state.pendingJsonResponse = "";
+          log(`RESP   <= ${full}`, "resp");
+          handleMaybeScanJson(full);
+          return;
+        }
+        if (state.pendingJsonResponse.length > 1800 || now - state.pendingJsonAt > 5000) {
+          log(`RESP   <= ${state.pendingJsonResponse}`, "resp");
+          state.pendingJsonResponse = "";
+        }
+        return;
+      }
+
+      if (parsedDirect === undefined && /^#?\S*\s*\{/.test(String(text).trim())) {
+        state.pendingJsonResponse = String(text);
+        state.pendingJsonAt = now;
+        return;
+      }
+
       if (text === state.lastResponseText && now - state.lastResponseAt < 500) {
         return;
       }
       state.lastResponseText = text;
       state.lastResponseAt = now;
       log(`RESP   <= ${text}`, "resp");
+      handleMaybeScanJson(text);
     }
 
     function lineNeedsTxNotify(line) {
@@ -653,13 +806,38 @@
       return Number(el.boardCmdPortInput?.value || state.config?.boardCommandPort || 5001);
     }
 
+    function quoteCommandArg(value) {
+      const text = String(value ?? "");
+
+      if (text.length === 0) {
+        return '""';
+      }
+
+      if (!/[\s"'\\]/.test(text)) {
+        return text;
+      }
+
+      return '"' + text
+        .replaceAll('\\', '\\\\')
+        .replaceAll('\r', '\\r')
+        .replaceAll('\n', '\\n')
+        .replaceAll('\t', '\\t')
+        .replaceAll('"', '\\"') + '"';
+    }
+
     function hydrateTemplateCommand(command) {
+      const ssid = el.ssidInput.value.trim();
+      const password = el.passwordInput.value;
+      const quotedSsid = ssid ? quoteCommandArg(ssid) : "YOUR_SSID";
+      const quotedPassword = password ? quoteCommandArg(password) : "YOUR_PASSWORD";
+      const quotedOpenSsid = ssid ? quoteCommandArg(ssid) : "YOUR_OPEN_SSID";
+
       return command
         .replaceAll("HOST_IP", selectedHostIp())
         .replaceAll("5000", selectedUdpPort())
-        .replaceAll("YOUR_SSID", el.ssidInput.value.trim() || "YOUR_SSID")
-        .replaceAll("YOUR_PASSWORD", el.passwordInput.value || "YOUR_PASSWORD")
-        .replaceAll("YOUR_OPEN_SSID", el.ssidInput.value.trim() || "YOUR_OPEN_SSID");
+        .replaceAll("YOUR_SSID", quotedSsid)
+        .replaceAll("YOUR_PASSWORD", quotedPassword)
+        .replaceAll("YOUR_OPEN_SSID", quotedOpenSsid);
     }
 
     function selectedTemplate() {
@@ -734,6 +912,10 @@
       el.sendCommandBtn.disabled = !connected || !state.chars.commandWrite;
       el.setCredBtn.disabled = !connected || !state.chars.commandWrite;
       el.makeWifiTxBtn.disabled = !connected || !state.chars.commandWrite;
+      el.setBoardCmdPortBtn.disabled = !connected || !state.chars.commandWrite;
+      el.scanWifiBleBtn.disabled = !connected || !state.chars.commandWrite;
+      el.scanLastBtn.disabled = !connected || !state.chars.commandWrite;
+      el.connectScannedSsidBtn.disabled = !connected || !state.chars.commandWrite;
       el.sendTemplateBtn.disabled = !connected || !state.chars.commandWrite;
 
       for (const btn of el.quickCmds) {
@@ -1077,7 +1259,25 @@
           if (el.boardIpInput && msg.address && !el.boardIpInput.value) {
             el.boardIpInput.value = msg.address;
           }
-          log(`UDP <= ${msg.from} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
+          try {
+            const parsed = JSON.parse(msg.text);
+            if (parsed && parsed.type === "wifi_scan") {
+              updateScanResults(parsed.results || []);
+              log(`SCAN <= ${msg.address} ${parsed.count || 0} network(s)`, "wifi");
+            } else if (parsed && parsed.type === "wt02e40e_discovery") {
+              if (el.boardIpInput && msg.address) {
+                el.boardIpInput.value = msg.address;
+              }
+              if (el.boardCmdPortInput && parsed.cmd_port) {
+                el.boardCmdPortInput.value = String(parsed.cmd_port);
+              }
+              log(`DISC <= ${msg.address} name=${parsed.name} fw=${parsed.fw} cmd_port=${parsed.cmd_port}`, "wifi");
+            } else {
+              log(`UDP <= ${msg.from} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
+            }
+          } catch (_) {
+            log(`UDP <= ${msg.from} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
+          }
         } else if (msg.type === "udp_tx") {
           log(`UDP => ${msg.to} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
         } else if (msg.type === "server_connected") {
@@ -1153,6 +1353,89 @@
       }
     }
 
+    function updateScanResults(results) {
+      state.scanResults = Array.isArray(results) ? results : [];
+      el.scanSsidSelect.innerHTML = "";
+
+      if (!state.scanResults.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No scan results yet";
+        el.scanSsidSelect.appendChild(option);
+        return;
+      }
+
+      for (const item of state.scanResults) {
+        const option = document.createElement("option");
+        option.value = String(item.i ?? "");
+        option.textContent = `${item.i}: ${item.ssid}  ${item.rssi} dBm  ch ${item.channel}  ${item.security}`;
+        option.dataset.ssid = item.ssid || "";
+        option.dataset.security = item.security || "";
+        el.scanSsidSelect.appendChild(option);
+      }
+    }
+
+    function handleMaybeScanJson(text) {
+      const cleaned = stripRequestId(text);
+      if (!cleaned.startsWith("{")) {
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(cleaned);
+        if (parsed && parsed.type === "wifi_scan") {
+          updateScanResults(parsed.results || []);
+          log(`SCAN   <= ${parsed.count || 0} network(s), running=${parsed.running}`, "wifi");
+        }
+      } catch (_) {
+        // Not all responses are JSON. Ignore.
+      }
+    }
+
+    function selectedScanOption() {
+      return el.scanSsidSelect.options[el.scanSsidSelect.selectedIndex] || null;
+    }
+
+    function selectedScanSsid() {
+      const option = selectedScanOption();
+      return option?.dataset?.ssid || "";
+    }
+
+    function useSelectedScanSsid() {
+      const ssid = selectedScanSsid();
+      if (!ssid) {
+        log("No scanned SSID selected", "warn");
+        return;
+      }
+      el.ssidInput.value = ssid;
+      updateTemplateUi();
+      log(`Selected scanned SSID: ${ssid}`, "wifi");
+    }
+
+    function buildScanConnectCommand() {
+      const option = selectedScanOption();
+      const index = option?.value;
+      const ssid = selectedScanSsid();
+      const password = el.passwordInput.value;
+      const security = String(option?.dataset?.security || "").toLowerCase();
+
+      if (!index || !ssid) {
+        log("No scanned SSID selected", "warn");
+        return null;
+      }
+
+      if (security.includes("open") || security.includes("none")) {
+        return `wifi scan open ${index}\nwifi on\nwifi status`;
+      }
+
+      if (!password) {
+        log("Password is empty for selected secured network", "warn");
+        return null;
+      }
+
+      return `wifi scan connect ${index} ${quoteCommandArg(password)} ${el.securityInput.value}\nwifi on\nwifi status`;
+    }
+
     function buildCredentialCommand() {
       const ssid = el.ssidInput.value.trim();
       const password = el.passwordInput.value;
@@ -1164,10 +1447,10 @@
       }
 
       if (!password) {
-        return `wifi cred open ${ssid}`;
+        return `wifi cred open ${quoteCommandArg(ssid)}`;
       }
 
-      return `wifi cred set ${ssid} ${password} ${security}`;
+      return `wifi cred set ${quoteCommandArg(ssid)} ${quoteCommandArg(password)} ${security}`;
     }
 
     function buildWifiTxCommand() {
@@ -1212,6 +1495,28 @@
       }
     });
 
+    el.scanWifiBleBtn.addEventListener("click", () => {
+      writeCommand("wifi scan json");
+    });
+
+    el.scanWifiUdpBtn.addEventListener("click", () => {
+      el.wifiCommandInput.value = "wifi scan json";
+      sendWifiCommandFromNode();
+    });
+
+    el.scanLastBtn.addEventListener("click", () => {
+      writeCommand("wifi scan last json");
+    });
+
+    el.useScannedSsidBtn.addEventListener("click", useSelectedScanSsid);
+
+    el.connectScannedSsidBtn.addEventListener("click", () => {
+      const command = buildScanConnectCommand();
+      if (command) {
+        writeCommand(command);
+      }
+    });
+
     el.makeWifiTxBtn.addEventListener("click", () => {
       writeCommand(buildWifiTxCommand());
     });
@@ -1228,6 +1533,12 @@
     el.wifiCmdStatusBtn.addEventListener("click", () => {
       el.wifiCommandInput.value = "wifi cmd status";
       sendWifiCommandFromNode();
+    });
+
+    el.setBoardCmdPortBtn.addEventListener("click", () => {
+      const port = currentBoardCommandPort();
+      writeCommand(`wifi cmd port ${port}`);
+      log(`After response, the board should rebind its UDP command socket to ${port}.`, "node");
     });
 
     el.sendUdpBtn.addEventListener("click", sendUdpFromNode);
@@ -1251,6 +1562,7 @@
     el.hostIpSelect.addEventListener("change", updateTemplateUi);
 
     populateTemplates();
+    updateScanResults([]);
     setConnectedUi(false);
 
     if (!window.isSecureContext) {

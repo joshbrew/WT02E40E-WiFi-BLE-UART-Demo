@@ -16,6 +16,7 @@ target_include_directories(app PUBLIC
 
 target_sources(app PRIVATE
 	src/main.c
+	src/wt_app.c
 	src/wt_ble.c
 	src/wt_common.c
 	src/wt_leds.c

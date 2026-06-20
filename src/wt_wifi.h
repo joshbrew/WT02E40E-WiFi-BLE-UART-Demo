@@ -11,6 +11,8 @@
 bool wt_wifi_is_requested(void);
 bool wt_wifi_is_associated(void);
 bool wt_wifi_has_ipv4(void);
+int wt_wifi_ipv4_get(char *buf, size_t size);
+int wt_wifi_mac_get(char *buf, size_t size);
 
 int wt_wifi_init(void);
 int wt_wifi_service_set(bool enable);
@@ -28,7 +30,14 @@ int wt_wifi_udp_transmit_payload(const char *ip_text, const char *port_text,
 int wt_wifi_cmd_service_set(bool enable);
 bool wt_wifi_cmd_is_enabled(void);
 uint16_t wt_wifi_cmd_port(void);
+int wt_wifi_cmd_port_set(uint16_t port);
+int wt_wifi_discovery_service_set(bool enable);
+bool wt_wifi_discovery_is_enabled(void);
 int wt_wifi_command_execute(const char *line, char *rsp, size_t rsp_len);
+int wt_wifi_scan_command(char **argv, size_t argc, char *rsp, size_t rsp_len);
+int wt_wifi_scan_format_results(char *buf, size_t size, bool json);
+bool wt_wifi_scan_is_running(void);
+int wt_wifi_scan_count(void);
 
 #ifdef CONFIG_WIFI_READY_LIB
 int wt_wifi_register_ready_callback(void);

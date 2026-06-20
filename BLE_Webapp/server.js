@@ -31,7 +31,7 @@ const UDP_PORT = numberArg(args.udp, 5000);
 const BOARD_CMD_PORT = numberArg(args.cmd, 5001);
 const HOST = args.host || "0.0.0.0";
 const ROOT = __dirname;
-const WEBAPP_VERSION = "2026-06-20-read-status-lock-v3";
+const WEBAPP_VERSION = "2026-06-20-live-udp-rebind-v10";
 
 const clients = new Set();
 const udpLog = [];

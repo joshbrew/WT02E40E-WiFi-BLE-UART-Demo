@@ -109,6 +109,9 @@ wifi on
 wifi off
 wifi status
 wifi reconnect
+wifi scan
+wifi scan json
+wifi scan last json
 ```
 
 ### Wi-Fi credentials
@@ -146,6 +149,20 @@ tx both <ipv4> <port> <message>
 `tx wifi` sends a UDP packet over Wi-Fi.
 
 `tx both` uses the combined transmit path implemented in the firmware.
+
+
+## Quoted arguments
+
+The firmware command parser supports quoted arguments over BLE and Wi-Fi UDP commands, and the UART/RTT shell accepts quoted arguments through Zephyr shell parsing. Use quotes for SSIDs, passwords, and other positional arguments with spaces.
+
+```text
+wifi cred set "My Home WiFi" "correct horse battery staple" wpa2
+wifi cred open "Coffee Shop WiFi"
+tx ble "hello with spaces"
+tx wifi <computer-ip> 5000 "payload with spaces"
+```
+
+The webapp credential helper automatically quotes SSID/password values when needed.
 
 ## BLE characteristic map
 
@@ -220,6 +237,8 @@ Useful commands:
 wifi cmd status
 wifi cmd on
 wifi cmd off
+wifi cmd port
+wifi cmd port 5002
 status
 wifi status
 tx uart hello from wifi command
@@ -231,3 +250,80 @@ tx wifi <computer-ip> 5000 hello back to node
 ## BLE self-off note
 
 The webapp can send `ble off`, `mode idle`, or `mode wifi` over the BLE command characteristic. The firmware responds first, then drops the BLE connection after a short delay. Use UART/RTT or the Wi-Fi UDP command panel to turn BLE back on after that.
+
+
+## New identity/discovery helpers
+
+The webapp includes templates for:
+
+```text
+id
+version
+config
+config json
+ble name
+ble name set WT02E40E-CMD-01
+discovery on
+discovery status
+```
+
+`discovery on` makes the board broadcast a JSON packet to this Node server on UDP port `5000`. The page auto-fills the board IP and board command port when it receives that discovery packet.
+
+## All-features command set
+
+This webapp version includes templates and reference text for the full command feature pass:
+
+```text
+id / version / config / config json / status json
+boot status / boot mode <idle|ble|wifi|both>
+ble name set "WT02E40E-CMD-01"
+discovery on/off/status
+#42 status
+ble off 5s / wifi off 5s / mode ble 5s
+bridge status / bridge target <ip> <port> / bridge all on / bridge send <message>
+ping / ping ble / ping wifi <ip> <port>
+fw status / fw reboot 5s / fw reboot bootloader 5s
+```
+
+The built-in bring-up wizard in `index.html` gives the recommended first test sequence.
+
+
+## Live UDP command port rebind
+
+The Wi-Fi command listener port can be changed at runtime from UART, BLE, or the existing Wi-Fi command path:
+
+```text
+wifi cmd port          # show current command port
+wifi cmd port 5002     # rebind listener to UDP/5002
+config save            # persist across reboot
+```
+
+When the port changes, the command thread closes the old UDP socket and binds the new one on the next poll cycle. If the command was sent over Wi-Fi, the response is sent from the old socket first, then the listener moves to the new port. Discovery packets report the current `cmd_port`, and the Node webapp updates its board command port field from discovery.
+
+
+## Wi-Fi AP scanning
+
+This build can scan nearby Wi-Fi access points from UART, BLE, or the Wi-Fi UDP command path. Zephyr exposes scan requests through `NET_REQUEST_WIFI_SCAN` and returns individual scan-result events, which this app stores as a small latest-results table.
+
+```text
+wifi scan                         # start scan, wait, return compact text
+wifi scan json                    # start scan, wait, return JSON
+wifi scan start                   # start scan asynchronously
+wifi scan last                    # read previous scan as text
+wifi scan last json               # read previous scan as JSON
+wifi scan status                  # running/valid/count state
+wifi scan clear                   # clear cached scan results
+wifi scan connect <index> <password> [wpa2|auto|wpa3]
+wifi scan open <index>
+```
+
+Example flow from BLE or UART:
+
+```text
+wifi scan json
+wifi scan connect 1 "my password with spaces" wpa2
+wifi on
+wifi status
+```
+
+The included `BLE_Webapp` now has a scan helper that can populate the SSID field from scan results.
