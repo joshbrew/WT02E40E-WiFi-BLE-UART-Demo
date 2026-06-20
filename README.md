@@ -808,3 +808,318 @@ wifi status
 ```
 
 The included `BLE_Webapp` now has a scan helper that can populate the SSID field from scan results.
+
+## Basic command paths
+
+The firmware exposes the same command/control layer over UART/RTT, BLE, and Wi-Fi UDP.
+
+```txt
+UART/RTT shell  -> wt commands
+BLE             -> command write characteristic
+Wi-Fi UDP       -> board command socket, default UDP port 5001
+```
+
+UART/RTT commands use the `wt` prefix:
+
+```txt
+wt status
+wt wifi status
+```
+
+BLE and Wi-Fi command packets can omit the prefix:
+
+```txt
+status
+wifi status
+```
+
+## BLE command to UART test
+
+This test sends a command from BLE and prints a payload through the firmware UART path.
+
+1. Connect to `WT02E40E-CMD` in the BLE webapp.
+2. Enable command response notifications.
+3. Send:
+
+```txt
+tx uart "hello from ble"
+```
+
+Expected BLE response:
+
+```txt
+ok uart tx ...
+```
+
+Expected UART/log-side output:
+
+```txt
+hello from ble
+```
+
+## BLE command to Wi-Fi UDP test
+
+This test sends a BLE command that makes the board transmit a UDP packet over Wi-Fi.
+
+1. Start the local webapp server:
+
+```powershell
+cd BLE_Webapp
+node server.js
+```
+
+2. Open:
+
+```txt
+http://localhost:8080
+```
+
+3. Connect to BLE.
+4. Put the board into BLE + Wi-Fi mode and connect Wi-Fi:
+
+```txt
+mode both
+wifi cred set "Your SSID" "Your Password" wpa2
+wifi on
+wifi status
+```
+
+5. Use the webapp LAN IP shown by Node and send:
+
+```txt
+tx wifi 192.168.1.50 5000 "hello from board over udp"
+```
+
+Expected webapp log:
+
+```txt
+UDP <= <board-ip>:<port> "hello from board over udp"
+```
+
+## Wi-Fi command to BLE TX test
+
+This test sends a command to the board over Wi-Fi, then receives the resulting payload over BLE.
+
+1. Connect to BLE.
+2. Enable BLE TX notifications.
+3. Make sure Wi-Fi is connected and the board command socket is enabled:
+
+```txt
+mode both
+wifi cmd on
+wifi status
+```
+
+4. In the webapp Wi-Fi command panel, send:
+
+```txt
+tx ble "hello from wifi command path"
+```
+
+Expected BLE log:
+
+```txt
+TX <= hello from wifi command path
+```
+
+Expected Wi-Fi command response:
+
+```txt
+ok ble tx ...
+```
+
+## Wi-Fi command to UART test
+
+This test sends a command to the board over Wi-Fi and forwards a payload to UART.
+
+1. Make sure Wi-Fi command receive is on:
+
+```txt
+wifi cmd on
+wifi cmd status
+```
+
+2. From the webapp Wi-Fi command panel, send:
+
+```txt
+tx uart "hello from wifi command path"
+```
+
+Expected board/UART-side output:
+
+```txt
+hello from wifi command path
+```
+
+## Discover the board on the LAN
+
+Discovery is not Wi-Fi AP scanning. It is the board announcing itself on the LAN so the webapp can auto-fill the board IP and command port.
+
+Enable discovery:
+
+```txt
+discovery on
+config save
+```
+
+Once Wi-Fi has IPv4, the board broadcasts discovery JSON to the Node webapp listener:
+
+```json
+{
+  "type": "wt02e40e_discovery",
+  "name": "WT02E40E-CMD",
+  "cmd_port": 5001
+}
+```
+
+The webapp uses this to fill in:
+
+```txt
+Board IP
+Board Wi-Fi command port
+Device name
+Firmware info
+```
+
+## Scan Wi-Fi networks and connect
+
+Use the scan command to list nearby access points.
+
+```txt
+wifi scan json
+```
+
+Or in the BLE webapp, use the Wi-Fi scan panel.
+
+After scan results are available, connect by index:
+
+```txt
+wifi scan connect 1 "your password" wpa2
+wifi on
+wifi status
+```
+
+For an open network:
+
+```txt
+wifi scan open 1
+wifi on
+```
+
+## Rename the BLE device
+
+The BLE advertised name can be changed at runtime.
+
+```txt
+ble name set WT02E40E-CMD-01
+config save
+```
+
+If the device is currently advertising, advertising restarts with the new name. If a BLE client is already connected, the new name appears the next time the device advertises.
+
+## Change the Wi-Fi command port
+
+The board command socket defaults to UDP port `5001`.
+
+Check the current port:
+
+```txt
+wifi cmd port
+```
+
+Live-rebind it:
+
+```txt
+wifi cmd port 5002
+```
+
+Persist it:
+
+```txt
+config save
+```
+
+If the command is sent over Wi-Fi, the board responds on the old socket first, then rebinds to the new port.
+
+## Use request IDs for cleaner logs
+
+Commands can include a request ID prefix so responses are easier to match.
+
+```txt
+#42 status
+#43 wifi status json
+```
+
+Expected responses preserve the ID:
+
+```txt
+#42 ok ...
+#43 ok ...
+```
+
+## Safe delayed radio cutoff
+
+Some commands can intentionally cut off the transport you are using. Use delayed cutoff commands when testing from BLE or Wi-Fi.
+
+Turn BLE off after 5 seconds:
+
+```txt
+ble off 5s
+```
+
+Switch to Wi-Fi-only mode after 5 seconds:
+
+```txt
+mode wifi 5s
+```
+
+Turn Wi-Fi off after 5 seconds:
+
+```txt
+wifi off 5s
+```
+
+This gives the response time to reach the client before the control path disappears.
+
+## Save and reset runtime config
+
+Save runtime settings like BLE name, discovery state, boot mode, and Wi-Fi command port:
+
+```txt
+config save
+```
+
+Reset runtime config back to defaults:
+
+```txt
+config reset
+```
+
+Check current config:
+
+```txt
+config
+config json
+```
+
+## Reboot from command interface
+
+Normal reboot:
+
+```txt
+fw reboot
+```
+
+Delayed reboot:
+
+```txt
+fw reboot 5s
+```
+
+Bootloader reboot hook:
+
+```txt
+fw reboot bootloader 5s
+```
+
+Use delayed reboot from BLE/Wi-Fi so the response can be sent before the board resets.
