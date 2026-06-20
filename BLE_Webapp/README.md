@@ -360,3 +360,50 @@ Firmware `0.3.4-parserfix` fixes the quoted-argument tokenizer so multi-word com
 tx ble "hello from the web console"
 wifi cred set "My Home WiFi" "password with spaces" wpa2
 ```
+
+
+## Command packets quick reference
+
+The webapp sends UTF-8 text commands to the board over either BLE or Wi-Fi UDP.
+
+BLE command packet:
+
+```txt
+Webapp -> BLE command write characteristic
+Payload: UTF-8 command text
+Example: status json
+```
+
+BLE response packet:
+
+```txt
+Board -> BLE command response notify/read characteristic
+Payload: UTF-8 response text
+Example: ok ...
+```
+
+Wi-Fi command packet:
+
+```txt
+Webapp/Node -> board UDP command port, default 5001
+Payload: UTF-8 command text
+Example: #42 wifi status json
+```
+
+Wi-Fi command response:
+
+```txt
+Board -> sender IP/port
+Payload: UTF-8 response text
+Example: #42 ok ...
+```
+
+Discovery packet:
+
+```txt
+Board -> UDP broadcast port 5000
+Payload: JSON object with type=wt02e40e_discovery
+The webapp uses the sender IP plus cmd_port to auto-fill the board command panel.
+```
+
+See the root `README.md` for the full command list and demo flows.

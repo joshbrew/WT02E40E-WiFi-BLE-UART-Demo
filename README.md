@@ -12,6 +12,78 @@ There's an additional BLE_Webapp you can use for quick testing if the programmin
 <img width="500" alt="image" src="https://github.com/user-attachments/assets/a4b94aed-e316-48fd-9c9b-f96997f97339" />
 
 
+<!-- WT02E40E_TOC_START -->
+## Table of contents
+
+- [What this firmware does](#what-this-firmware-does)
+- [Hardware assumptions](#hardware-assumptions)
+- [Debug/programming hookup used during bring-up](#debugprogramming-hookup-used-during-bring-up)
+- [LEDs](#leds)
+- [UART shell pins](#uart-shell-pins)
+- [Build and flash](#build-and-flash)
+- [Required sysbuild config](#required-sysbuild-config)
+- [Default radio mode](#default-radio-mode)
+- [BLE self-disable behavior](#ble-self-disable-behavior)
+- [Wi-Fi antenna note](#wi-fi-antenna-note)
+- [Wi-Fi credentials](#wi-fi-credentials)
+- [UART/RTT command shell](#uartrtt-command-shell)
+- [BLE service](#ble-service)
+- [Payload limits and parser behavior](#payload-limits-and-parser-behavior)
+- [Source layout](#source-layout)
+- [Important project files](#important-project-files)
+- [Troubleshooting](#troubleshooting)
+- [Notes before productizing](#notes-before-productizing)
+- [BLE_Webapp](#blewebapp)
+- [Three-way command bridge](#three-way-command-bridge)
+- [Device identity, BLE renaming, and discovery](#device-identity-ble-renaming-and-discovery)
+- [Full command feature pass](#full-command-feature-pass)
+- [Live UDP command port rebind](#live-udp-command-port-rebind)
+- [Wi-Fi AP scanning](#wi-fi-ap-scanning)
+- [BLE command execution note](#ble-command-execution-note)
+- [TX command quoting note](#tx-command-quoting-note)
+- [BLE TX write-path fix](#ble-tx-write-path-fix)
+- [Parser fix note](#parser-fix-note)
+- [Full command list summary](#full-command-list-summary)
+  - [Status, identity, and config](#status-identity-and-config)
+  - [Boot behavior](#boot-behavior)
+  - [Radio mode switching](#radio-mode-switching)
+  - [BLE control](#ble-control)
+  - [Wi-Fi control](#wi-fi-control)
+  - [Wi-Fi credentials](#wi-fi-credentials)
+  - [Wi-Fi AP scanning](#wi-fi-ap-scanning)
+  - [Wi-Fi UDP command receive](#wi-fi-udp-command-receive)
+  - [Discovery beacon](#discovery-beacon)
+  - [Transmit commands](#transmit-commands)
+  - [Bridge rules](#bridge-rules)
+  - [Ping and latency tests](#ping-and-latency-tests)
+  - [Firmware and reboot hooks](#firmware-and-reboot-hooks)
+  - [Request IDs](#request-ids)
+- [Packet and transport structure](#packet-and-transport-structure)
+  - [BLE GATT structure](#ble-gatt-structure)
+  - [UART/RTT shell structure](#uartrtt-shell-structure)
+  - [Wi-Fi UDP command structure](#wi-fi-udp-command-structure)
+  - [Wi-Fi UDP payload TX structure](#wi-fi-udp-payload-tx-structure)
+  - [Discovery packet structure](#discovery-packet-structure)
+  - [Wi-Fi scan JSON structure](#wi-fi-scan-json-structure)
+- [Use case demo command flows](#use-case-demo-command-flows)
+  - [1. First BLE sanity test](#1-first-ble-sanity-test)
+  - [2. UART to BLE TX test](#2-uart-to-ble-tx-test)
+  - [3. BLE to UART test](#3-ble-to-uart-test)
+  - [4. BLE to Wi-Fi UDP test](#4-ble-to-wi-fi-udp-test)
+  - [5. Wi-Fi command to BLE TX test](#5-wi-fi-command-to-ble-tx-test)
+  - [6. Wi-Fi command to UART test](#6-wi-fi-command-to-uart-test)
+  - [7. Discover the board on the LAN](#7-discover-the-board-on-the-lan)
+  - [8. Scan Wi-Fi networks and connect by index](#8-scan-wi-fi-networks-and-connect-by-index)
+  - [9. Rename the BLE device](#9-rename-the-ble-device)
+  - [10. Change Wi-Fi command port live](#10-change-wi-fi-command-port-live)
+  - [11. Use request IDs](#11-use-request-ids)
+  - [12. Safe delayed radio cutoff](#12-safe-delayed-radio-cutoff)
+  - [13. Bridge all enabled outputs](#13-bridge-all-enabled-outputs)
+  - [14. Reboot safely from BLE or Wi-Fi](#14-reboot-safely-from-ble-or-wi-fi)
+
+<!-- WT02E40E_TOC_END -->
+
+
 ## What this firmware does
 
 - Boots in BLE mode by default.
@@ -841,3 +913,733 @@ Firmware `0.3.4-parserfix` fixes the quoted-argument tokenizer so multi-word com
 tx ble "hello from the web console"
 wifi cred set "My Home WiFi" "password with spaces" wpa2
 ```
+
+## Full command list summary
+
+The command grammar is intentionally text-based so the same commands can be sent from UART/RTT, BLE, or Wi-Fi UDP.
+
+Transport prefix rules:
+
+```txt
+UART/RTT shell:
+  wt <command> [args...]
+
+BLE command characteristic:
+  <command> [args...]
+  wt <command> [args...] is also accepted
+
+Wi-Fi UDP command socket:
+  <command> [args...]
+  wt <command> [args...] is also accepted
+```
+
+Quoted arguments are supported on BLE and Wi-Fi command paths, and Zephyr shell quoting works on UART/RTT:
+
+```txt
+wifi cred set "My Home WiFi" "password with spaces" wpa2
+tx ble "hello from uart"
+tx wifi 192.168.1.50 5000 "payload with spaces"
+```
+
+Supported escape sequences inside quotes:
+
+```txt
+\"    literal quote
+\\    literal backslash
+\n    newline
+\r    carriage return
+\t    tab
+```
+
+### Status, identity, and config
+
+```txt
+status
+status json
+
+id
+version
+
+config
+config json
+config save
+config reset
+```
+
+`status` gives the compact operational state. `status json` is meant for tools/web UIs. `config save` persists runtime configuration such as BLE name, discovery state, boot mode, and Wi-Fi command port. `config reset` restores runtime config defaults.
+
+### Boot behavior
+
+```txt
+boot status
+boot mode idle
+boot mode ble
+boot mode wifi
+boot mode both
+```
+
+Boot mode controls which radio mode the app enters after reset. Use `config save` after changing boot mode if it should persist.
+
+### Radio mode switching
+
+```txt
+mode idle
+mode ble
+mode wifi
+mode both
+
+mode idle 5s
+mode ble 5s
+mode wifi 5s
+mode both 5s
+```
+
+The delayed forms are useful when the command would cut off the current control path. For example, `mode wifi 5s` sent from BLE gives the BLE response time to get back before BLE disconnects.
+
+### BLE control
+
+```txt
+ble on
+ble off
+ble off 5s
+ble status
+ble status json
+
+ble name
+ble name get
+ble name set <name>
+
+name set <name>
+```
+
+`ble off` can be sent from BLE. When sent from BLE, the response is sent first, then BLE disconnect/stop is scheduled. The new BLE name is used on the next advertising cycle. Use `config save` to persist the name across reset.
+
+### Wi-Fi control
+
+```txt
+wifi on
+wifi off
+wifi off 5s
+wifi status
+wifi status json
+wifi reconnect
+```
+
+Wi-Fi stays off by default unless the selected boot mode or a command enables it.
+
+### Wi-Fi credentials
+
+```txt
+wifi cred list
+wifi cred set <ssid> <password> [wpa2|auto|wpa3]
+wifi cred add <ssid> <password> [wpa2|auto|wpa3]
+wifi cred open <ssid>
+wifi cred forget <ssid>
+wifi cred clear
+```
+
+`set` clears stored runtime credentials and selects a new secured network. `add` adds another network. `open` stores/selects an open network. `clear` removes runtime credentials but does not remove compiled fallback credentials from the firmware image.
+
+### Wi-Fi AP scanning
+
+```txt
+wifi scan
+wifi scan json
+wifi scan start
+wifi scan wait
+wifi scan wait json
+wifi scan last
+wifi scan last json
+wifi scan status
+wifi scan clear
+wifi scan connect <index> <password> [wpa2|auto|wpa3]
+wifi scan open <index>
+```
+
+`wifi scan json` starts a scan and returns structured results. `wifi scan last` reports the last stored result list without starting a new scan. `wifi scan connect` uses an index from the last scan result list to set credentials.
+
+### Wi-Fi UDP command receive
+
+```txt
+wifi cmd status
+wifi cmd on
+wifi cmd off
+wifi cmd port
+wifi cmd port <port>
+```
+
+The board command socket defaults to UDP port `5001`. `wifi cmd port <port>` live-rebinds the listener. If sent over Wi-Fi, the board responds from the old socket first, then rebinds on the next worker cycle. Use `config save` to persist the new port.
+
+### Discovery beacon
+
+```txt
+discovery on
+discovery off
+discovery status
+```
+
+Discovery is LAN discovery, not Wi-Fi AP scanning. When enabled and Wi-Fi has IPv4, the board broadcasts a small JSON packet so the Node webapp can auto-fill board IP, command port, name, and firmware version.
+
+### Transmit commands
+
+```txt
+tx ble <message>
+tx uart <message>
+tx wifi <ipv4> <port> <message>
+tx both <ipv4> <port> <message>
+```
+
+`tx ble` sends to the BLE TX notify characteristic. A BLE client must be connected and subscribed to TX notifications. `tx uart` writes to the firmware UART TX path. `tx wifi` sends a UDP payload over Wi-Fi. `tx both` uses the combined transmit path.
+
+### Bridge rules
+
+```txt
+bridge status
+bridge status json
+
+bridge target <ip> <port>
+
+bridge ble on
+bridge ble off
+bridge uart on
+bridge uart off
+bridge wifi on
+bridge wifi off
+bridge all on
+bridge all off
+
+bridge send <message>
+bridge all <message>
+```
+
+Bridge rules control which transports are used when forwarding generic bridge messages. `bridge target` sets the Wi-Fi destination used by bridge Wi-Fi output.
+
+### Ping and latency tests
+
+```txt
+ping
+ping uart
+ping ble
+ping wifi <ip> <port>
+```
+
+These are quick path checks. `ping ble` requires BLE TX notifications to be enabled. `ping wifi` sends a UDP ping payload to the selected IP/port.
+
+### Firmware and reboot hooks
+
+```txt
+fw status
+fw reboot
+fw reboot 5s
+fw reboot bootloader
+fw reboot bootloader 5s
+
+reboot
+reboot 5s
+```
+
+Use delayed reboot forms over BLE/Wi-Fi so the response can leave before reset.
+
+### Request IDs
+
+Any command can optionally start with a request ID:
+
+```txt
+#42 status
+#43 wifi status json
+#44 tx ble "hello"
+```
+
+Responses preserve the ID:
+
+```txt
+#42 ok ...
+#43 ok ...
+#44 ok ble tx 5 bytes
+```
+
+This is useful for tools that may have multiple commands in flight or multiple transports active.
+
+## Packet and transport structure
+
+### BLE GATT structure
+
+BLE uses one custom service with five characteristics:
+
+```txt
+Service UUID:             7f1c0001-2b5a-4f2d-9a31-d6a5f4e040e1
+
+TX notify UUID:           7f1c0002-2b5a-4f2d-9a31-d6a5f4e040e1
+Status read/notify UUID:  7f1c0003-2b5a-4f2d-9a31-d6a5f4e040e1
+Command write UUID:       7f1c0004-2b5a-4f2d-9a31-d6a5f4e040e1
+Command response UUID:    7f1c0005-2b5a-4f2d-9a31-d6a5f4e040e1
+```
+
+BLE command packet:
+
+```txt
+Client -> Command write characteristic
+
+UTF-8 text command
+No binary framing required
+Trailing newline optional
+Example:
+  tx ble "hello from ble"
+```
+
+BLE response packet:
+
+```txt
+Board -> Command response characteristic
+
+UTF-8 text response
+Readable as last-response value
+Notify when command response notifications are enabled
+Example:
+  ok ble tx 14 bytes
+```
+
+BLE TX packet:
+
+```txt
+Board -> TX notify characteristic
+
+UTF-8 payload
+Notify only
+Used by:
+  tx ble <message>
+  bridge ble output
+  ping ble
+```
+
+BLE status packet:
+
+```txt
+Board -> Status read/notify characteristic
+
+UTF-8 status line or status JSON
+Read manually any time
+Periodic notification only when status notifications are enabled
+```
+
+BLE payload sizing:
+
+```txt
+ATT payload = negotiated ATT MTU - 3
+App-level BLE chunks are capped at 255 bytes
+Default fallback payload is 20 bytes if MTU stays at 23 or notify rejects the larger packet
+```
+
+### UART/RTT shell structure
+
+UART and RTT use Zephyr shell syntax:
+
+```txt
+Host -> board:
+  wt <command> [args...]
+
+Board -> host:
+  shell/log output
+```
+
+UART parameters:
+
+```txt
+115200 baud
+8 data bits
+No parity
+1 stop bit
+Common ground required
+```
+
+UART shell commands require the `wt` root prefix:
+
+```txt
+wt status
+wt tx ble "hello from uart"
+wt wifi status
+```
+
+### Wi-Fi UDP command structure
+
+Board command receive socket:
+
+```txt
+Node/webapp/host -> WT02E40E
+UDP destination port: default 5001, configurable with wifi cmd port <port>
+Payload: UTF-8 text command
+```
+
+Example command packet payload:
+
+```txt
+#42 status json
+```
+
+Board command response:
+
+```txt
+WT02E40E -> sender IP/port
+UDP payload: UTF-8 text response
+```
+
+Example response packet payload:
+
+```txt
+#42 {"ok":true,"name":"WT02E40E-CMD","mode":"both",...}
+```
+
+Wi-Fi UDP command packets are intentionally simple and unauthenticated for bring-up. Do not expose this command port on an untrusted LAN without adding authentication or pairing logic.
+
+### Wi-Fi UDP payload TX structure
+
+The `tx wifi` command sends arbitrary text to a target UDP host/port:
+
+```txt
+Command:
+  tx wifi <ipv4> <port> <message>
+
+Packet:
+  Board -> <ipv4>:<port>
+  UDP payload = <message> as UTF-8 bytes
+```
+
+Example:
+
+```txt
+tx wifi 192.168.1.50 5000 "hello over udp"
+```
+
+### Discovery packet structure
+
+When discovery is enabled, the board broadcasts a JSON packet to the Node/webapp UDP listener port.
+
+Default destination:
+
+```txt
+UDP broadcast port: 5000
+```
+
+Example discovery payload:
+
+```json
+{
+  "type": "wt02e40e_discovery",
+  "name": "WT02E40E-CMD",
+  "fw": "0.3.5-parserfix2",
+  "cmd_port": 5001,
+  "udp_rx_port": 5000,
+  "uptime_s": 42
+}
+```
+
+The sender IP from the UDP packet is the board IP. The webapp uses that sender IP plus `cmd_port` to auto-fill the Wi-Fi command panel.
+
+### Wi-Fi scan JSON structure
+
+The JSON scan commands return a list of recent APs. Shape may be compact to fit command buffers, but conceptually:
+
+```json
+{
+  "ok": true,
+  "scan": {
+    "running": false,
+    "count": 3,
+    "results": [
+      {
+        "index": 1,
+        "ssid": "My Home WiFi",
+        "rssi": -44,
+        "channel": 6,
+        "security": "wpa2",
+        "bssid": "aa:bb:cc:dd:ee:ff"
+      }
+    ]
+  }
+}
+```
+
+The `index` field is what `wifi scan connect <index> ...` and `wifi scan open <index>` use.
+
+## Use case demo command flows
+
+These are meant as quick bring-up demos for the README. Replace IPs, SSIDs, and passwords with local values.
+
+### 1. First BLE sanity test
+
+```txt
+status
+ble status
+config
+```
+
+Expected:
+
+```txt
+BLE connected
+mode=ble
+wifi_req=off
+```
+
+### 2. UART to BLE TX test
+
+This sends a message from UART/RTT and receives it on a connected BLE client.
+
+On the BLE client, enable notifications on:
+
+```txt
+TX notify UUID:
+7f1c0002-2b5a-4f2d-9a31-d6a5f4e040e1
+```
+
+From UART/RTT:
+
+```txt
+wt tx ble "hello from uart"
+```
+
+Expected BLE/webapp log:
+
+```txt
+TX <= hello from uart
+```
+
+If the command returns `-13` or says TX notify is off, the BLE client is connected but has not enabled TX notifications.
+
+### 3. BLE to UART test
+
+From BLE command write:
+
+```txt
+tx uart "hello from ble"
+```
+
+Expected command response:
+
+```txt
+ok uart tx ...
+```
+
+Expected UART/log-side output:
+
+```txt
+hello from ble
+```
+
+### 4. BLE to Wi-Fi UDP test
+
+Start the Node webapp:
+
+```powershell
+cd BLE_Webapp
+node server.js
+```
+
+Open:
+
+```txt
+http://localhost:8080
+```
+
+Connect BLE, then send:
+
+```txt
+mode both
+wifi cred set "Your SSID" "Your Password" wpa2
+wifi on
+wifi status
+```
+
+After IPv4 is bound, send a UDP packet to the Node listener:
+
+```txt
+tx wifi 192.168.1.50 5000 "hello from board over udp"
+```
+
+Expected webapp log:
+
+```txt
+UDP <= <board-ip>:<port> "hello from board over udp"
+```
+
+### 5. Wi-Fi command to BLE TX test
+
+With BLE connected and TX notifications enabled:
+
+```txt
+mode both
+wifi cmd on
+wifi status
+```
+
+In the webapp Wi-Fi command panel, send to the board IP/command port:
+
+```txt
+tx ble "hello from wifi command path"
+```
+
+Expected BLE log:
+
+```txt
+TX <= hello from wifi command path
+```
+
+Expected Wi-Fi command response:
+
+```txt
+ok ble tx ...
+```
+
+### 6. Wi-Fi command to UART test
+
+In the webapp Wi-Fi command panel:
+
+```txt
+tx uart "hello from wifi command path"
+```
+
+Expected UART/log-side output:
+
+```txt
+hello from wifi command path
+```
+
+### 7. Discover the board on the LAN
+
+From BLE, UART, or Wi-Fi command:
+
+```txt
+discovery on
+config save
+```
+
+Once Wi-Fi has IPv4, the board broadcasts discovery JSON. The webapp should auto-fill:
+
+```txt
+Board IP
+Board command port
+Device name
+Firmware/version field
+```
+
+### 8. Scan Wi-Fi networks and connect by index
+
+From BLE or UART:
+
+```txt
+wifi scan json
+```
+
+Pick an index from the result list, then connect:
+
+```txt
+wifi scan connect 1 "your password" wpa2
+wifi on
+wifi status
+```
+
+For an open AP:
+
+```txt
+wifi scan open 1
+wifi on
+wifi status
+```
+
+### 9. Rename the BLE device
+
+```txt
+ble name set WT02E40E-CMD-01
+config save
+```
+
+If already connected, the current connection keeps working. The new name appears on the next advertising cycle.
+
+### 10. Change Wi-Fi command port live
+
+```txt
+wifi cmd port
+wifi cmd port 5002
+config save
+```
+
+If the command was sent over Wi-Fi, the response is sent from the old port first, then the board rebinds to the new port.
+
+### 11. Use request IDs
+
+```txt
+#42 status
+#43 wifi status json
+#44 tx ble "hello with an ID"
+```
+
+Expected response style:
+
+```txt
+#42 ok ...
+#43 {"ok":true,...}
+#44 ok ble tx ...
+```
+
+### 12. Safe delayed radio cutoff
+
+From BLE:
+
+```txt
+ble off 5s
+```
+
+Expected:
+
+```txt
+ok ble off scheduled 5000 ms
+```
+
+Then the BLE link drops after the delay.
+
+From Wi-Fi:
+
+```txt
+wifi off 5s
+```
+
+Expected:
+
+```txt
+ok wifi off scheduled 5000 ms
+```
+
+Then the Wi-Fi command path disappears after the delay.
+
+### 13. Bridge all enabled outputs
+
+Set a Wi-Fi bridge target:
+
+```txt
+bridge target 192.168.1.50 5000
+bridge all on
+bridge status
+```
+
+Send a bridge message:
+
+```txt
+bridge send "hello across enabled bridge outputs"
+```
+
+Expected:
+
+```txt
+BLE TX notification if subscribed
+UART output
+UDP packet to bridge target if Wi-Fi is connected
+```
+
+### 14. Reboot safely from BLE or Wi-Fi
+
+```txt
+fw status
+fw reboot 5s
+```
+
+The delayed form gives the response time to reach the client before the board resets.
