@@ -1,0 +1,1168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WT02E40E BLE + Wi-Fi Console</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1016;
+      --panel: #141a23;
+      --panel2: #101620;
+      --text: #edf3ff;
+      --muted: #9aa7ba;
+      --border: #263244;
+      --good: #5ee28f;
+      --warn: #ffd166;
+      --bad: #ff6b6b;
+      --accent: #7ab7ff;
+      --code: #0a0f15;
+      --shadow: rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 20% 0%, rgba(122, 183, 255, 0.12), transparent 32rem),
+        radial-gradient(circle at 90% 20%, rgba(94, 226, 143, 0.08), transparent 26rem),
+        var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    header {
+      max-width: 1420px;
+      margin: 0 auto;
+      padding: 28px 20px 12px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(1.75rem, 3vw, 2.8rem);
+      line-height: 1.05;
+    }
+
+    .sub {
+      color: var(--muted);
+      max-width: 1100px;
+      line-height: 1.45;
+    }
+
+    main {
+      max-width: 1420px;
+      margin: 0 auto;
+      padding: 12px 20px 28px;
+      display: grid;
+      gap: 16px;
+      grid-template-columns: minmax(350px, 0.82fr) minmax(460px, 1.18fr);
+    }
+
+    @media (max-width: 1040px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    section {
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 7rem), var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: 0 18px 48px var(--shadow);
+      padding: 16px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 1rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    h3 {
+      margin: 12px 0 8px;
+      font-size: 0.96rem;
+      color: #c9d8eb;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin: 10px 0;
+    }
+
+    .stack { display: grid; gap: 10px; }
+
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: #1a2432;
+      color: var(--text);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      border-color: #3e526f;
+      background: #203047;
+    }
+
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.primary { background: #173456; border-color: #315f92; }
+    button.danger { background: #3b1d24; border-color: #733240; }
+    button.templateBtn { text-align: left; padding: 9px 10px; font-size: 0.9rem; }
+
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel2);
+      color: var(--text);
+      padding: 11px 12px;
+      font: inherit;
+      outline: none;
+    }
+
+    input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+
+    textarea {
+      min-height: 88px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 650;
+    }
+
+    .statusGrid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin: 12px 0;
+    }
+
+    .pill {
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      border-radius: 999px;
+      padding: 8px 11px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pill strong { color: var(--text); }
+
+    .dot {
+      display: inline-block;
+      width: 0.7em;
+      height: 0.7em;
+      border-radius: 999px;
+      background: var(--bad);
+      margin-right: 0.45em;
+      vertical-align: -0.02em;
+      box-shadow: 0 0 14px currentColor;
+    }
+
+    .dot.good { background: var(--good); color: var(--good); }
+    .dot.warn { background: var(--warn); color: var(--warn); }
+
+    .quick, .templates {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .three {
+      display: grid;
+      grid-template-columns: 1fr 0.55fr auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .two {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    @media (max-width: 720px) {
+      .quick, .templates, .statusGrid, .three, .two { grid-template-columns: 1fr; }
+    }
+
+    pre {
+      margin: 0;
+      background: var(--code);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+      overflow: auto;
+      min-height: 430px;
+      max-height: 72vh;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.88rem;
+      line-height: 1.4;
+    }
+
+    code {
+      background: var(--code);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 2px 6px;
+      color: #cfe4ff;
+    }
+
+    details {
+      border: 1px solid var(--border);
+      background: rgba(10, 15, 21, 0.48);
+      border-radius: 14px;
+      padding: 10px 12px;
+    }
+
+    summary {
+      cursor: pointer;
+      color: #c9d8eb;
+      font-weight: 800;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    .cmdList {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+
+    .cmdList code { color: #d9ecff; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>WT02E40E BLE + Wi-Fi Console</h1>
+    <div class="sub">
+      Browser talks to the WT02E40E over Web Bluetooth. Node hosts this page and listens for Wi-Fi/UDP packets from the board.
+      Open with <code>http://localhost:8080</code>. The board advertises as <code>WT02E40E-CMD</code>.
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <h2>BLE connection</h2>
+
+      <div class="row">
+        <button id="connectBtn" class="primary">Connect BLE</button>
+        <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
+      </div>
+
+      <div class="statusGrid">
+        <div class="pill"><span id="connDot" class="dot"></span><strong id="connState">Disconnected</strong></div>
+        <div class="pill">Device: <strong id="deviceName">none</strong></div>
+        <div class="pill">Status notify: <strong id="statusNotify">off</strong></div>
+        <div class="pill">Response notify: <strong id="responseNotify">off</strong></div>
+        <div class="pill">TX notify: <strong id="txNotify">off</strong></div>
+        <div class="pill">UDP listener: <strong id="udpState">loading</strong></div>
+      </div>
+
+      <div class="stack">
+        <button id="readStatusBtn" disabled>Read status once</button>
+        <button id="statusSubBtn" disabled>Toggle status notifications</button>
+        <button id="responseSubBtn" disabled>Toggle command response notifications</button>
+        <button id="txSubBtn" disabled>Toggle BLE TX notifications</button>
+      </div>
+
+      <p class="small">
+        Recommended: connect, enable command response notifications, then send commands. Status notifications only ping when enabled.
+      </p>
+
+      <h2>Command write</h2>
+
+      <label>
+        Command
+        <textarea id="commandInput" spellcheck="false" placeholder="status&#10;mode both&#10;wifi cred set testwifi testpassword123&#10;wifi on&#10;tx wifi 192.168.1.50 5000 hello over udp"></textarea>
+      </label>
+
+      <div class="row">
+        <button id="sendCommandBtn" class="primary" disabled>Send command</button>
+        <button id="clearCommandBtn">Clear</button>
+        <button id="insertTemplateBtn">Insert selected template</button>
+      </div>
+
+      <h2>Command templates</h2>
+
+      <div class="stack">
+        <label>
+          Template
+          <select id="templateSelect"></select>
+        </label>
+        <div class="two">
+          <label>
+            Template details
+            <input id="templateDescription" readonly>
+          </label>
+          <button id="sendTemplateBtn" disabled>Send template</button>
+        </div>
+      </div>
+
+      <h3>One-click common tasks</h3>
+      <div class="templates" id="commonTemplateButtons"></div>
+
+      <h2>Quick commands</h2>
+      <div class="quick">
+        <button class="quickCmd" data-cmd="status" disabled>status</button>
+        <button class="quickCmd" data-cmd="mode idle" disabled>mode idle</button>
+        <button class="quickCmd" data-cmd="mode ble" disabled>mode ble</button>
+        <button class="quickCmd" data-cmd="mode wifi" disabled>mode wifi</button>
+        <button class="quickCmd" data-cmd="mode both" disabled>mode both</button>
+        <button class="quickCmd" data-cmd="ble status" disabled>ble status</button>
+        <button class="quickCmd" data-cmd="wifi status" disabled>wifi status</button>
+        <button class="quickCmd" data-cmd="wifi cred list" disabled>wifi cred list</button>
+      </div>
+
+      <h2>Wi-Fi credential helper</h2>
+      <div class="stack">
+        <label>
+          SSID
+          <input id="ssidInput" autocomplete="off" placeholder="testwifi">
+        </label>
+        <label>
+          Password
+          <input id="passwordInput" type="password" autocomplete="off" placeholder="testpassword123">
+        </label>
+        <div class="three">
+          <label>
+            Security
+            <select id="securityInput">
+              <option value="wpa2">wpa2</option>
+              <option value="auto">auto</option>
+              <option value="wpa3">wpa3</option>
+            </select>
+          </label>
+          <span></span>
+          <button id="setCredBtn" disabled>Set creds</button>
+        </div>
+      </div>
+
+      <h2>Wi-Fi UDP receive helper</h2>
+      <div class="stack">
+        <div class="small">
+          Node is listening on UDP port <strong id="udpPort">?</strong>. Pick this computer's LAN IP, then ask the board to send to it.
+        </div>
+        <label>
+          This computer's LAN IP
+          <select id="hostIpSelect"></select>
+        </label>
+        <label>
+          UDP message to request from board
+          <input id="wifiMessageInput" value="hello from WT02E40E over UDP">
+        </label>
+        <button id="makeWifiTxBtn" disabled>Ask board to UDP TX to this page</button>
+      </div>
+
+      <h2>Optional UDP send from Node</h2>
+      <div class="stack">
+        <div class="three">
+          <label>
+            Target IP
+            <input id="udpTargetHost" placeholder="192.168.1.123">
+          </label>
+          <label>
+            Port
+            <input id="udpTargetPort" value="5000">
+          </label>
+          <button id="sendUdpBtn">Send UDP</button>
+        </div>
+        <label>
+          UDP payload
+          <input id="udpSendText" value="hello from node">
+        </label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Output</h2>
+      <pre id="log"></pre>
+
+      <div class="row">
+        <button id="clearLogBtn">Clear log</button>
+        <button id="copyLogBtn">Copy log</button>
+        <button id="clearUdpBtn">Clear server UDP log</button>
+      </div>
+
+      <h2>Command reference</h2>
+      <details open>
+        <summary>All supported command shapes</summary>
+        <ul class="cmdList">
+          <li><code>status</code> or <code>wt status</code>, prints full mode/BLE/Wi-Fi uptime status.</li>
+          <li><code>mode idle</code>, disables BLE advertising and Wi-Fi request state.</li>
+          <li><code>mode ble</code>, BLE only. This is the default boot mode.</li>
+          <li><code>mode wifi</code>, Wi-Fi only.</li>
+          <li><code>mode both</code>, BLE plus Wi-Fi.</li>
+          <li><code>ble on</code>, <code>ble off</code>, <code>ble status</code>.</li>
+          <li><code>wifi on</code>, <code>wifi off</code>, <code>wifi status</code>, <code>wifi reconnect</code>.</li>
+          <li><code>wifi cred list</code>, lists stored runtime credentials.</li>
+          <li><code>wifi cred set &lt;ssid&gt; &lt;password&gt; [wpa2|auto|wpa3]</code>, clears runtime credentials and stores/selects one secured network.</li>
+          <li><code>wifi cred add &lt;ssid&gt; &lt;password&gt; [wpa2|auto|wpa3]</code>, adds another secured network.</li>
+          <li><code>wifi cred open &lt;ssid&gt;</code>, stores/selects an open network.</li>
+          <li><code>wifi cred forget &lt;ssid&gt;</code>, removes one stored runtime credential.</li>
+          <li><code>wifi cred clear</code>, clears runtime credentials and falls back to compiled defaults.</li>
+          <li><code>tx ble &lt;message&gt;</code>, sends a message over the BLE TX notify characteristic if subscribed.</li>
+          <li><code>tx uart &lt;message&gt;</code>, writes a message to the firmware UART TX path.</li>
+          <li><code>tx wifi &lt;ipv4&gt; &lt;port&gt; &lt;message&gt;</code>, sends a UDP packet over Wi-Fi.</li>
+          <li><code>tx both &lt;ipv4&gt; &lt;port&gt; &lt;message&gt;</code>, sends using the combined TX path implemented in firmware.</li>
+        </ul>
+      </details>
+
+      <h2>Characteristic map</h2>
+      <div class="small mono">
+        Service: 7f1c0001-2b5a-4f2d-9a31-d6a5f4e040e1<br>
+        TX notify: 7f1c0002-2b5a-4f2d-9a31-d6a5f4e040e1<br>
+        Status read/notify: 7f1c0003-2b5a-4f2d-9a31-d6a5f4e040e1<br>
+        Command write: 7f1c0004-2b5a-4f2d-9a31-d6a5f4e040e1<br>
+        Command response: 7f1c0005-2b5a-4f2d-9a31-d6a5f4e040e1
+      </div>
+    </section>
+  </main>
+
+  <script>
+    "use strict";
+
+    const WEBAPP_VERSION = "2026-06-20-command-log-order-v4";
+
+    const UUIDS = {
+      service: "7f1c0001-2b5a-4f2d-9a31-d6a5f4e040e1",
+      txNotify: "7f1c0002-2b5a-4f2d-9a31-d6a5f4e040e1",
+      status: "7f1c0003-2b5a-4f2d-9a31-d6a5f4e040e1",
+      commandWrite: "7f1c0004-2b5a-4f2d-9a31-d6a5f4e040e1",
+      commandResponse: "7f1c0005-2b5a-4f2d-9a31-d6a5f4e040e1"
+    };
+
+    const COMMAND_TEMPLATES = [
+      { group: "Status", name: "Full status", cmd: "status", desc: "Read firmware status through the command response characteristic." },
+      { group: "Status", name: "BLE status", cmd: "ble status", desc: "Check BLE advertising/connection state." },
+      { group: "Status", name: "Wi-Fi status", cmd: "wifi status", desc: "Check Wi-Fi request/association/IP state." },
+
+      { group: "Modes", name: "Idle mode", cmd: "mode idle", desc: "Disable active radio modes." },
+      { group: "Modes", name: "BLE only", cmd: "mode ble", desc: "BLE command/status mode, no Wi-Fi request." },
+      { group: "Modes", name: "Wi-Fi only", cmd: "mode wifi", desc: "Wi-Fi mode without BLE staying intentionally active." },
+      { group: "Modes", name: "BLE + Wi-Fi", cmd: "mode both", desc: "Keep BLE command channel available while Wi-Fi runs." },
+
+      { group: "BLE", name: "BLE on", cmd: "ble on", desc: "Start BLE advertising if not connected." },
+      { group: "BLE", name: "BLE off", cmd: "ble off", desc: "Stop BLE advertising/disable BLE app mode." },
+      { group: "BLE", name: "BLE TX test", cmd: "tx ble hello from the web console", desc: "Notify a BLE TX message to subscribed clients." },
+
+      { group: "Wi-Fi", name: "Wi-Fi on", cmd: "wifi on", desc: "Start Wi-Fi connection using stored or compiled credentials." },
+      { group: "Wi-Fi", name: "Wi-Fi off", cmd: "wifi off", desc: "Stop Wi-Fi request state." },
+      { group: "Wi-Fi", name: "Wi-Fi reconnect", cmd: "wifi reconnect", desc: "Restart Wi-Fi connection attempt." },
+      { group: "Wi-Fi", name: "List credentials", cmd: "wifi cred list", desc: "List runtime Wi-Fi credentials known to firmware." },
+      { group: "Wi-Fi", name: "Set secured Wi-Fi", cmd: "wifi cred set YOUR_SSID YOUR_PASSWORD wpa2", desc: "Replace runtime credentials with one WPA2 network." },
+      { group: "Wi-Fi", name: "Add secured Wi-Fi", cmd: "wifi cred add YOUR_SSID YOUR_PASSWORD auto", desc: "Add another runtime credential without clearing all." },
+      { group: "Wi-Fi", name: "Set open Wi-Fi", cmd: "wifi cred open YOUR_OPEN_SSID", desc: "Store/select an open network." },
+      { group: "Wi-Fi", name: "Forget SSID", cmd: "wifi cred forget YOUR_SSID", desc: "Remove one runtime credential." },
+      { group: "Wi-Fi", name: "Clear credentials", cmd: "wifi cred clear", desc: "Clear runtime credentials. Compiled fallback remains in firmware." },
+
+      { group: "Transmit", name: "UART TX", cmd: "tx uart hello from BLE command console", desc: "Send text out the firmware UART TX path." },
+      { group: "Transmit", name: "Wi-Fi UDP TX", cmd: "tx wifi HOST_IP 5000 hello from WT02E40E over UDP", desc: "Send a UDP packet from the board to a target IPv4/port." },
+      { group: "Transmit", name: "Combined TX", cmd: "tx both HOST_IP 5000 hello over the combined transmit path", desc: "Use the firmware combined transmit command." },
+
+      { group: "Bring-up", name: "Configure and enable Wi-Fi", cmd: "mode both\nwifi cred set YOUR_SSID YOUR_PASSWORD wpa2\nwifi on\nwifi status", desc: "Common bring-up sequence with BLE still available." },
+      { group: "Bring-up", name: "Send board UDP to this page", cmd: "tx wifi HOST_IP 5000 hello from WT02E40E over UDP", desc: "Use Node's UDP listener as the packet target." },
+      { group: "Bring-up", name: "Ping all status paths", cmd: "status\nble status\nwifi status\nwifi cred list", desc: "Small diagnostic batch." }
+    ];
+
+    const COMMON_TEMPLATE_NAMES = [
+      "Full status",
+      "BLE + Wi-Fi",
+      "Configure and enable Wi-Fi",
+      "Send board UDP to this page",
+      "UART TX",
+      "BLE TX test"
+    ];
+
+    const state = {
+      device: null,
+      server: null,
+      service: null,
+      chars: {
+        txNotify: null,
+        status: null,
+        commandWrite: null,
+        commandResponse: null
+      },
+      statusNotifications: false,
+      responseNotifications: false,
+      txNotifications: false,
+      lastStatusText: "",
+      lastStatusAt: 0,
+      lastStatusSource: "",
+      readStatusBusy: false,
+      suppressStatusEventsUntil: 0,
+      lastResponseText: "",
+      lastResponseAt: 0,
+      config: null,
+      events: null
+    };
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    const el = {};
+    for (const id of [
+      "connectBtn", "disconnectBtn", "connDot", "connState", "deviceName",
+      "statusNotify", "responseNotify", "txNotify", "udpState", "readStatusBtn",
+      "statusSubBtn", "responseSubBtn", "txSubBtn", "commandInput", "sendCommandBtn",
+      "clearCommandBtn", "insertTemplateBtn", "templateSelect", "templateDescription",
+      "sendTemplateBtn", "commonTemplateButtons", "ssidInput", "passwordInput",
+      "securityInput", "setCredBtn", "udpPort", "hostIpSelect", "wifiMessageInput",
+      "makeWifiTxBtn", "udpTargetHost", "udpTargetPort", "udpSendText", "sendUdpBtn",
+      "log", "clearLogBtn", "copyLogBtn", "clearUdpBtn"
+    ]) {
+      el[id] = document.getElementById(id);
+    }
+
+    el.quickCmds = Array.from(document.querySelectorAll(".quickCmd"));
+
+    function timestamp() {
+      return new Date().toLocaleTimeString();
+    }
+
+    function log(message, kind = "info") {
+      const label = kind.toUpperCase().padEnd(7, " ");
+      el.log.textContent += `[${timestamp()}] ${label} ${message}\n`;
+      el.log.scrollTop = el.log.scrollHeight;
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function cleanBleText(text) {
+      return String(text ?? "").replace(/\0+$/g, "").trimEnd();
+    }
+
+    function logStatusText(text, source = "status") {
+      const cleaned = cleanBleText(text);
+      const now = performance.now();
+
+      // Web Bluetooth can surface a manual readValue() as both the awaited read
+      // and a characteristicvaluechanged event on some desktop stacks. Treat the
+      // same status string inside this window as one user-visible status event.
+      if (cleaned === state.lastStatusText && now - state.lastStatusAt < 2000) {
+        return;
+      }
+
+      state.lastStatusText = cleaned;
+      state.lastStatusAt = now;
+      state.lastStatusSource = source;
+      log(`STATUS <= ${cleaned}`, "status");
+    }
+
+    function logResponseText(text) {
+      const now = performance.now();
+      if (text === state.lastResponseText && now - state.lastResponseAt < 500) {
+        return;
+      }
+      state.lastResponseText = text;
+      state.lastResponseAt = now;
+      log(`RESP   <= ${text}`, "resp");
+    }
+
+    function lineNeedsTxNotify(line) {
+      const normalized = line.trim().toLowerCase();
+      return normalized.startsWith("tx ble ") || normalized.startsWith("wt tx ble ") ||
+             normalized.startsWith("tx bt ") || normalized.startsWith("wt tx bt ") ||
+             normalized.startsWith("tx both ") || normalized.startsWith("wt tx both ") ||
+             normalized.startsWith("tx all ") || normalized.startsWith("wt tx all ");
+    }
+
+    function selectedHostIp() {
+      return el.hostIpSelect.value || state.config?.addresses?.[0] || "HOST_IP";
+    }
+
+    function selectedUdpPort() {
+      return String(state.config?.udpPort || Number(el.udpTargetPort.value) || 5000);
+    }
+
+    function hydrateTemplateCommand(command) {
+      return command
+        .replaceAll("HOST_IP", selectedHostIp())
+        .replaceAll("5000", selectedUdpPort())
+        .replaceAll("YOUR_SSID", el.ssidInput.value.trim() || "YOUR_SSID")
+        .replaceAll("YOUR_PASSWORD", el.passwordInput.value || "YOUR_PASSWORD")
+        .replaceAll("YOUR_OPEN_SSID", el.ssidInput.value.trim() || "YOUR_OPEN_SSID");
+    }
+
+    function selectedTemplate() {
+      return COMMAND_TEMPLATES[Number(el.templateSelect.value)] || COMMAND_TEMPLATES[0];
+    }
+
+    function populateTemplates() {
+      el.templateSelect.innerHTML = "";
+
+      let currentGroup = "";
+      for (let i = 0; i < COMMAND_TEMPLATES.length; i += 1) {
+        const template = COMMAND_TEMPLATES[i];
+
+        if (template.group !== currentGroup) {
+          currentGroup = template.group;
+          const group = document.createElement("optgroup");
+          group.label = currentGroup;
+          el.templateSelect.appendChild(group);
+        }
+
+        const option = document.createElement("option");
+        option.value = String(i);
+        option.textContent = template.name;
+        el.templateSelect.lastElementChild.appendChild(option);
+      }
+
+      el.commonTemplateButtons.innerHTML = "";
+      for (const name of COMMON_TEMPLATE_NAMES) {
+        const index = COMMAND_TEMPLATES.findIndex(item => item.name === name);
+        if (index < 0) continue;
+
+        const button = document.createElement("button");
+        button.className = "templateBtn";
+        button.dataset.templateIndex = String(index);
+        button.textContent = `${COMMAND_TEMPLATES[index].group}: ${COMMAND_TEMPLATES[index].name}`;
+        button.disabled = true;
+        button.addEventListener("click", () => {
+          el.templateSelect.value = String(index);
+          updateTemplateUi();
+          sendTemplate();
+        });
+
+        el.commonTemplateButtons.appendChild(button);
+      }
+
+      updateTemplateUi();
+    }
+
+    function updateTemplateUi() {
+      const template = selectedTemplate();
+      el.templateDescription.value = template.desc;
+    }
+
+    function insertTemplate() {
+      const command = hydrateTemplateCommand(selectedTemplate().cmd);
+      el.commandInput.value = command;
+      el.commandInput.focus();
+    }
+
+    function sendTemplate() {
+      const command = hydrateTemplateCommand(selectedTemplate().cmd);
+      writeCommand(command);
+    }
+
+    function setConnectedUi(connected) {
+      el.connectBtn.disabled = connected;
+      el.disconnectBtn.disabled = !connected;
+      el.readStatusBtn.disabled = !connected || !state.chars.status;
+      el.statusSubBtn.disabled = !connected || !state.chars.status;
+      el.responseSubBtn.disabled = !connected || !state.chars.commandResponse;
+      el.txSubBtn.disabled = !connected || !state.chars.txNotify;
+      el.sendCommandBtn.disabled = !connected || !state.chars.commandWrite;
+      el.setCredBtn.disabled = !connected || !state.chars.commandWrite;
+      el.makeWifiTxBtn.disabled = !connected || !state.chars.commandWrite;
+      el.sendTemplateBtn.disabled = !connected || !state.chars.commandWrite;
+
+      for (const btn of el.quickCmds) {
+        btn.disabled = !connected || !state.chars.commandWrite;
+      }
+
+      for (const btn of el.commonTemplateButtons.querySelectorAll("button")) {
+        btn.disabled = !connected || !state.chars.commandWrite;
+      }
+
+      el.connState.textContent = connected ? "Connected" : "Disconnected";
+      el.connDot.classList.toggle("good", connected);
+      el.deviceName.textContent = state.device?.name || "none";
+      el.statusNotify.textContent = state.statusNotifications ? "on" : "off";
+      el.responseNotify.textContent = state.responseNotifications ? "on" : "off";
+      el.txNotify.textContent = state.txNotifications ? "on" : "off";
+    }
+
+    function onDisconnected() {
+      log("BLE disconnected", "warn");
+
+      state.server = null;
+      state.service = null;
+      state.chars.txNotify = null;
+      state.chars.status = null;
+      state.chars.commandWrite = null;
+      state.chars.commandResponse = null;
+      state.statusNotifications = false;
+      state.responseNotifications = false;
+      state.txNotifications = false;
+
+      setConnectedUi(false);
+    }
+
+    async function getCharacteristicOrNull(service, uuid, label) {
+      try {
+        const characteristic = await service.getCharacteristic(uuid);
+        log(`Found ${label}`);
+        return characteristic;
+      } catch (err) {
+        log(`Missing ${label}: ${err.message}`, "warn");
+        return null;
+      }
+    }
+
+    async function connect() {
+      if (!("bluetooth" in navigator)) {
+        log("Web Bluetooth is not available. Use Chrome/Edge on HTTPS or localhost.", "error");
+        return;
+      }
+
+      try {
+        log("Requesting WT02E40E-CMD device...");
+
+        state.device = await navigator.bluetooth.requestDevice({
+          filters: [{ namePrefix: "WT02E40E" }],
+          optionalServices: [UUIDS.service]
+        });
+
+        state.device.addEventListener("gattserverdisconnected", onDisconnected);
+
+        log(`Selected ${state.device.name || "unnamed device"}`);
+        state.server = await state.device.gatt.connect();
+        log("GATT connected");
+
+        state.service = await state.server.getPrimaryService(UUIDS.service);
+        log("Command service opened");
+
+        state.chars.txNotify = await getCharacteristicOrNull(state.service, UUIDS.txNotify, "TX notify characteristic");
+        state.chars.status = await getCharacteristicOrNull(state.service, UUIDS.status, "status read/notify characteristic");
+        state.chars.commandWrite = await getCharacteristicOrNull(state.service, UUIDS.commandWrite, "command write characteristic");
+        state.chars.commandResponse = await getCharacteristicOrNull(state.service, UUIDS.commandResponse, "command response read/notify characteristic");
+
+        if (state.chars.status) {
+          state.chars.status.addEventListener("characteristicvaluechanged", event => {
+            const text = decoder.decode(event.target.value);
+            const now = performance.now();
+
+            // Ignore synthetic/stale valuechanged events caused by readValue().
+            // Real periodic status notifications are only expected when the user
+            // has explicitly enabled status notifications.
+            if (!state.statusNotifications || now < state.suppressStatusEventsUntil) {
+              return;
+            }
+
+            logStatusText(text, "notify");
+          });
+        }
+
+        if (state.chars.commandResponse) {
+          state.chars.commandResponse.addEventListener("characteristicvaluechanged", event => {
+            const text = decoder.decode(event.target.value);
+            logResponseText(text);
+          });
+        }
+
+        if (state.chars.txNotify) {
+          state.chars.txNotify.addEventListener("characteristicvaluechanged", event => {
+            const text = decoder.decode(event.target.value);
+            log(`TX     <= ${text}`, "tx");
+          });
+        }
+
+        setConnectedUi(true);
+
+        if (state.chars.commandResponse) {
+          await toggleResponseNotifications(true);
+        }
+
+        if (state.chars.status) {
+          await readStatus();
+        }
+      } catch (err) {
+        log(`Connect failed: ${err.message}`, "error");
+        try {
+          state.device?.gatt?.disconnect();
+        } catch (_) {}
+        onDisconnected();
+      }
+    }
+
+    function disconnect() {
+      if (state.device?.gatt?.connected) {
+        state.device.gatt.disconnect();
+      } else {
+        onDisconnected();
+      }
+    }
+
+    async function readTextCharacteristic(characteristic) {
+      const value = await characteristic.readValue();
+      return decoder.decode(value);
+    }
+
+    async function readStatus() {
+      if (!state.chars.status) {
+        log("Status characteristic not available", "warn");
+        return;
+      }
+
+      if (state.readStatusBusy) {
+        return;
+      }
+
+      state.readStatusBusy = true;
+      state.suppressStatusEventsUntil = performance.now() + 1200;
+      el.readStatusBtn.disabled = true;
+
+      try {
+        const text = await readTextCharacteristic(state.chars.status);
+        logStatusText(text, "read");
+      } catch (err) {
+        log(`Status read failed: ${err.message}`, "error");
+      } finally {
+        setTimeout(() => {
+          state.readStatusBusy = false;
+          setConnectedUi(Boolean(state.server?.connected));
+        }, 250);
+      }
+    }
+
+    async function readCommandResponse() {
+      if (!state.chars.commandResponse) {
+        return;
+      }
+
+      try {
+        const text = await readTextCharacteristic(state.chars.commandResponse);
+        if (text) {
+          logResponseText(text);
+        }
+      } catch (err) {
+        log(`Response read failed: ${err.message}`, "warn");
+      }
+    }
+
+    async function setNotifications(characteristic, enabled) {
+      if (enabled) {
+        await characteristic.startNotifications();
+      } else {
+        await characteristic.stopNotifications();
+      }
+    }
+
+    async function toggleStatusNotifications(forceValue = null) {
+      if (!state.chars.status) return;
+      const next = forceValue ?? !state.statusNotifications;
+
+      try {
+        await setNotifications(state.chars.status, next);
+        state.statusNotifications = next;
+        setConnectedUi(true);
+        log(`Status notifications ${next ? "enabled" : "disabled"}`);
+      } catch (err) {
+        log(`Status notify toggle failed: ${err.message}`, "error");
+      }
+    }
+
+    async function toggleResponseNotifications(forceValue = null) {
+      if (!state.chars.commandResponse) return;
+      const next = forceValue ?? !state.responseNotifications;
+
+      try {
+        await setNotifications(state.chars.commandResponse, next);
+        state.responseNotifications = next;
+        setConnectedUi(true);
+        log(`Command response notifications ${next ? "enabled" : "disabled"}`);
+      } catch (err) {
+        log(`Response notify toggle failed: ${err.message}`, "error");
+      }
+    }
+
+    async function toggleTxNotifications(forceValue = null) {
+      if (!state.chars.txNotify) return;
+      const next = forceValue ?? !state.txNotifications;
+
+      try {
+        await setNotifications(state.chars.txNotify, next);
+        state.txNotifications = next;
+        setConnectedUi(true);
+        log(`BLE TX notifications ${next ? "enabled" : "disabled"}`);
+      } catch (err) {
+        log(`TX notify toggle failed: ${err.message}`, "error");
+      }
+    }
+
+    async function writeCommand(command) {
+      const lines = command.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+
+      if (!lines.length) {
+        log("Nothing to send", "warn");
+        return;
+      }
+
+      if (!state.chars.commandWrite) {
+        log("Command write characteristic not available", "error");
+        return;
+      }
+
+      for (const line of lines) {
+        if (lineNeedsTxNotify(line) && state.chars.txNotify && !state.txNotifications) {
+          log("Enabling BLE TX notifications before tx ble/tx both", "info");
+          await toggleTxNotifications(true);
+          await sleep(80);
+        }
+
+        const payload = encoder.encode(line);
+
+        log(`CMD    => ${line}`, "cmd");
+
+        try {
+          if (state.chars.commandWrite.properties.write) {
+            await state.chars.commandWrite.writeValueWithResponse(payload);
+          } else if (state.chars.commandWrite.properties.writeWithoutResponse) {
+            await state.chars.commandWrite.writeValueWithoutResponse(payload);
+          } else {
+            await state.chars.commandWrite.writeValue(payload);
+          }
+
+          setTimeout(readCommandResponse, 180);
+
+          await sleep(120);
+        } catch (err) {
+          log(`CMDERR <= ${line}: ${err.message}`, "error");
+          break;
+        }
+      }
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch(`/api/config?v=${encodeURIComponent(WEBAPP_VERSION)}&t=${Date.now()}`, { cache: "no-store" });
+        const contentType = res.headers.get("content-type") || "";
+
+        if (!res.ok || !contentType.includes("application/json")) {
+          const preview = (await res.text()).slice(0, 80).replace(/\s+/g, " ");
+          throw new Error(`Node API is not responding as JSON. Run \`node BLE_Webapp/server.js\` and open http://localhost:8080. Got: ${preview}`);
+        }
+
+        state.config = await res.json();
+
+        el.udpPort.textContent = String(state.config.udpPort);
+        el.udpState.textContent = `:${state.config.udpPort}`;
+
+        el.hostIpSelect.innerHTML = "";
+        for (const address of state.config.addresses) {
+          const option = document.createElement("option");
+          option.value = address;
+          option.textContent = address;
+          el.hostIpSelect.appendChild(option);
+        }
+
+        if (!state.config.addresses.length) {
+          const option = document.createElement("option");
+          option.value = "127.0.0.1";
+          option.textContent = "127.0.0.1";
+          el.hostIpSelect.appendChild(option);
+        }
+
+        log(`Node UDP listener ready on port ${state.config.udpPort}. LAN IPs: ${state.config.addresses.join(", ") || "none"}`, "node");
+        updateTemplateUi();
+        return true;
+      } catch (err) {
+        el.udpState.textContent = "offline";
+        log(`Could not load Node config: ${err.message}`, "error");
+        log("The BLE console can still work, but Wi-Fi UDP receive needs the Node server, not a static server.", "warn");
+        return false;
+      }
+    }
+
+    function connectEvents() {
+      if (!state.config) {
+        return;
+      }
+
+      if (state.events) {
+        state.events.close();
+      }
+
+      state.events = new EventSource("/events");
+
+      state.events.onopen = () => {
+        el.udpState.textContent = state.config ? `:${state.config.udpPort}` : "connected";
+        log("Node event stream connected", "node");
+      };
+
+      state.events.onerror = () => {
+        el.udpState.textContent = "event error";
+      };
+
+      state.events.onmessage = event => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "udp_rx") {
+          log(`UDP <= ${msg.from} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
+        } else if (msg.type === "udp_tx") {
+          log(`UDP => ${msg.to} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
+        } else if (msg.type === "server_connected") {
+          log(`Node stream ready. UDP port ${msg.udpPort}`, "node");
+        } else if (msg.type === "udp_clear") {
+          log("Server UDP log cleared", "node");
+        } else {
+          log(`EVENT  ${JSON.stringify(msg)}`, "node");
+        }
+      };
+    }
+
+    async function sendUdpFromNode() {
+      const host = el.udpTargetHost.value.trim();
+      const port = Number(el.udpTargetPort.value);
+      const text = el.udpSendText.value;
+
+      try {
+        const res = await fetch("/api/udp/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ host, port, text })
+        });
+
+        const data = await res.json();
+
+        if (!data.ok) {
+          log(`Node UDP send failed: ${data.error}`, "error");
+        }
+      } catch (err) {
+        log(`Node UDP send failed: ${err.message}`, "error");
+      }
+    }
+
+    async function clearServerUdpLog() {
+      try {
+        await fetch("/api/udp/clear", { method: "POST" });
+      } catch (err) {
+        log(`Could not clear UDP log: ${err.message}`, "error");
+      }
+    }
+
+    function buildCredentialCommand() {
+      const ssid = el.ssidInput.value.trim();
+      const password = el.passwordInput.value;
+      const security = el.securityInput.value;
+
+      if (!ssid) {
+        log("SSID is empty", "warn");
+        return null;
+      }
+
+      if (!password) {
+        return `wifi cred open ${ssid}`;
+      }
+
+      return `wifi cred set ${ssid} ${password} ${security}`;
+    }
+
+    function buildWifiTxCommand() {
+      const host = selectedHostIp();
+      const port = selectedUdpPort();
+      const message = el.wifiMessageInput.value || "hello from WT02E40E over UDP";
+      return `tx wifi ${host} ${port} ${message}`;
+    }
+
+    el.connectBtn.addEventListener("click", connect);
+    el.disconnectBtn.addEventListener("click", disconnect);
+    el.readStatusBtn.addEventListener("click", readStatus);
+    el.statusSubBtn.addEventListener("click", () => toggleStatusNotifications());
+    el.responseSubBtn.addEventListener("click", () => toggleResponseNotifications());
+    el.txSubBtn.addEventListener("click", () => toggleTxNotifications());
+
+    el.sendCommandBtn.addEventListener("click", () => writeCommand(el.commandInput.value));
+    el.commandInput.addEventListener("keydown", event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        writeCommand(el.commandInput.value);
+      }
+    });
+
+    el.clearCommandBtn.addEventListener("click", () => {
+      el.commandInput.value = "";
+      el.commandInput.focus();
+    });
+
+    el.templateSelect.addEventListener("change", updateTemplateUi);
+    el.insertTemplateBtn.addEventListener("click", insertTemplate);
+    el.sendTemplateBtn.addEventListener("click", sendTemplate);
+
+    for (const btn of el.quickCmds) {
+      btn.addEventListener("click", () => writeCommand(btn.dataset.cmd));
+    }
+
+    el.setCredBtn.addEventListener("click", () => {
+      const command = buildCredentialCommand();
+      if (command) {
+        writeCommand(command);
+      }
+    });
+
+    el.makeWifiTxBtn.addEventListener("click", () => {
+      writeCommand(buildWifiTxCommand());
+    });
+
+    el.sendUdpBtn.addEventListener("click", sendUdpFromNode);
+    el.clearUdpBtn.addEventListener("click", clearServerUdpLog);
+
+    el.clearLogBtn.addEventListener("click", () => {
+      el.log.textContent = "";
+    });
+
+    el.copyLogBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(el.log.textContent);
+        log("Copied log to clipboard");
+      } catch (err) {
+        log(`Copy failed: ${err.message}`, "error");
+      }
+    });
+
+    el.ssidInput.addEventListener("input", updateTemplateUi);
+    el.passwordInput.addEventListener("input", updateTemplateUi);
+    el.hostIpSelect.addEventListener("change", updateTemplateUi);
+
+    populateTemplates();
+    setConnectedUi(false);
+
+    if (!window.isSecureContext) {
+      log("This page is not a secure context. Serve from localhost or HTTPS for Web Bluetooth.", "warn");
+    }
+
+    log(`Ready. Webapp ${WEBAPP_VERSION}. Starting Node UDP event stream.`);
+    loadConfig().then(ok => {
+      if (ok) {
+        connectEvents();
+      }
+    });
+  </script>
+</body>
+</html>
