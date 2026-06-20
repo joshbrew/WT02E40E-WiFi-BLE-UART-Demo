@@ -2,7 +2,7 @@
 
 This project is a bring-up and command bridge application for a WT02E40E module, which combines an nRF5340 host MCU with an nRF7002 Wi-Fi companion.
 
-This was compiled successfully with the nRF Connect Toolchain ver v3.3.1 in VSCode.
+This was compiled successfully with the nRF Connect Toolchain ver v3.3.1 in VSCode. The BLE, UART, and WiFi search are working, still testing the rest.
 
 The app starts in BLE-only mode by default, exposes a UART/RTT shell, exposes a matching BLE command interface, and can turn Wi-Fi on later when the antenna and credentials are ready. It is based on Nordic's Wi-Fi station sample, but the application code has been split into smaller modules so the behavior is easier to trace.
 
