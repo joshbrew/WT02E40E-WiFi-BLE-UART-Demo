@@ -8,6 +8,9 @@ The app starts in BLE-only mode by default, exposes a UART/RTT shell, exposes a 
 
 There's an additional BLE_Webapp you can use for quick testing if the programming was successful. You can server the server.js from Node or host the index.html yourself e.g. with the LiveServer extension on VSCode. Use Chrome for web BLE support.
 
+<img width="500" alt="rn_image_picker_lib_temp_8a1bb018-cece-4d18-a960-d8604912be75" src="https://github.com/user-attachments/assets/7c44a742-f9b0-41f6-8764-3b026d386278" />
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/a4b94aed-e316-48fd-9c9b-f96997f97339" />
+
 
 ## What this firmware does
 
