@@ -42,7 +42,6 @@ There's an additional BLE_Webapp you can use for quick testing if the programmin
 - [BLE command execution note](#ble-command-execution-note)
 - [TX command quoting note](#tx-command-quoting-note)
 - [BLE TX write-path fix](#ble-tx-write-path-fix)
-- [Parser fix note](#parser-fix-note)
 - [Full command list summary](#full-command-list-summary)
   - [Status, identity, and config](#status-identity-and-config)
   - [Boot behavior](#boot-behavior)
@@ -899,20 +898,6 @@ tx wifi 192.168.1.50 5000 "hello over UDP"
 
 The firmware joins remaining TX arguments into a payload, but quoting is still the safest form when sending through Web Bluetooth or copying commands between BLE, UART, and Wi-Fi.
 
-
-## BLE TX write-path fix
-
-Firmware version `0.3.3-ble-tx-writefix` debounces BLE command writes for a few milliseconds before dispatching. This keeps Web Bluetooth long/offset writes from executing a partial command like `tx ble` before the payload fragment arrives.
-
-
-## Parser fix note
-
-Firmware `0.3.4-parserfix` fixes the quoted-argument tokenizer so multi-word commands over BLE and Wi-Fi UDP parse correctly. This specifically fixes commands like:
-
-```text
-tx ble "hello from the web console"
-wifi cred set "My Home WiFi" "password with spaces" wpa2
-```
 
 ## Full command list summary
 
