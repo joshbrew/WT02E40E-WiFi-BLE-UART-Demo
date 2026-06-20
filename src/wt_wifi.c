@@ -1161,13 +1161,16 @@ static void print_dhcp_ip(struct net_mgmt_event_callback *cb)
 {
 	const struct net_if_dhcpv4 *dhcpv4 = cb->info;
 	const struct in_addr *addr = &dhcpv4->requested_ip;
-	char dhcp_info[128];
 
-	net_addr_ntop(AF_INET, addr, dhcp_info, sizeof(dhcp_info));
-	snprintk(wifi_ipv4_text, sizeof(wifi_ipv4_text), "%s", dhcp_info);
+	wifi_ipv4_text[0] = '\0';
+	net_addr_ntop(AF_INET, addr, wifi_ipv4_text, sizeof(wifi_ipv4_text));
+
+	if (wifi_ipv4_text[0] == '\0') {
+		snprintk(wifi_ipv4_text, sizeof(wifi_ipv4_text), "0.0.0.0");
+	}
 
 	wifi_context.ipv4_bound = true;
-	LOG_INF("DHCP IP address: %s", dhcp_info);
+	LOG_INF("DHCP IP address: %s", wifi_ipv4_text);
 }
 
 static void net_mgmt_event_handler(struct net_mgmt_event_callback *cb,
@@ -1474,50 +1477,6 @@ static int wt_wifi_cmd_rsp(char *rsp, size_t rsp_len, const char *fmt, ...)
 	return len;
 }
 
-
-static int wt_wifi_status_format(char *buf, size_t size)
-{
-	const char *mode;
-	int len;
-
-	if (wt_wifi_is_requested() && wt_ble_is_requested()) {
-		mode = "both";
-	} else if (wt_wifi_is_requested()) {
-		mode = "wifi";
-	} else if (wt_ble_is_requested()) {
-		mode = "ble";
-	} else {
-		mode = "idle";
-	}
-
-	len = snprintk(buf, size,
-			"WT02E40E status: name=%s mode=%s ble=%s adv=%s tx_notify=%s status_notify=%s cmd_rsp_notify=%s wifi_req=%s wifi_assoc=%s ipv4=%s wifi_cmd=%s cmd_port=%u discovery=%s uptime=%llds",
-			wt_ble_name_get(),
-			mode,
-			wt_onoff_txt(wt_ble_is_connected()),
-			wt_onoff_txt(wt_ble_is_advertising()),
-			wt_onoff_txt(wt_ble_tx_notify_is_enabled()),
-			wt_onoff_txt(wt_ble_status_notify_is_enabled()),
-			wt_onoff_txt(wt_ble_cmd_response_notify_is_enabled()),
-			wt_onoff_txt(wt_wifi_is_requested()),
-			wt_onoff_txt(wt_wifi_is_associated()),
-			wt_onoff_txt(wt_wifi_has_ipv4()),
-			wt_onoff_txt(wt_wifi_cmd_is_enabled()),
-			wt_wifi_cmd_port(),
-			wt_onoff_txt(wt_wifi_discovery_is_enabled()),
-			(long long)(k_uptime_get() / 1000));
-
-	if (len < 0) {
-		buf[0] = '\0';
-		return 0;
-	}
-
-	if ((size_t)len >= size) {
-		return size - 1;
-	}
-
-	return len;
-}
 
 static int wt_wifi_cmd_tx_uart_payload(char **argv, size_t argc, size_t payload_arg)
 {
@@ -2023,7 +1982,30 @@ static void wt_wifi_cmd_prefix_request_id(const char *cmd, char *rsp, size_t rsp
 
 	strncpy(old, rsp, sizeof(old) - 1);
 	old[sizeof(old) - 1] = '\0';
-	snprintk(rsp, rsp_len, "#%s %s", id, old);
+
+	/*
+	 * Build the prefixed response in two bounded steps so GCC does not warn
+	 * about a possible %s truncation when old[] contains a full-size response.
+	 */
+	rsp[0] = '\0';
+	int prefix_len = snprintk(rsp, rsp_len, "#%s ", id);
+
+	if (prefix_len < 0) {
+		rsp[0] = '\0';
+		return;
+	}
+
+	if ((size_t)prefix_len >= rsp_len) {
+		rsp[rsp_len - 1] = '\0';
+		return;
+	}
+
+	size_t used = (size_t)prefix_len;
+	size_t room = rsp_len - used - 1;
+	size_t copy_len = MIN(strlen(old), room);
+
+	memcpy(&rsp[used], old, copy_len);
+	rsp[used + copy_len] = '\0';
 }
 
 static void wt_wifi_cmd_trim(char *buf)
