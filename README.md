@@ -1,8 +1,13 @@
-# WT02E40E Wi-Fi + BLE Command Bring-Up
+# WT02E40E Wi-Fi + BLE + UART Command Bring-Up
 
 This project is a bring-up and command bridge application for a WT02E40E module, which combines an nRF5340 host MCU with an nRF7002 Wi-Fi companion.
 
+This was compiled successfully with the nRF Connect Toolchain ver v3.3.1 in VSCode.
+
 The app starts in BLE-only mode by default, exposes a UART/RTT shell, exposes a matching BLE command interface, and can turn Wi-Fi on later when the antenna and credentials are ready. It is based on Nordic's Wi-Fi station sample, but the application code has been split into smaller modules so the behavior is easier to trace.
+
+There's an additional BLE_Webapp you can use for quick testing if the programming was successful. You can server the server.js from Node or host the index.html yourself e.g. with the LiveServer extension on VSCode. Use Chrome for web BLE support.
+
 
 ## What this firmware does
 
