@@ -238,3 +238,28 @@ wifi status
 ```
 
 Then send commands either over BLE, UART shell, or Wi-Fi UDP to `<board-ip>:5001`.
+
+
+## BLE on/off notes
+
+BLE can be controlled from UART/RTT, BLE commands, or Wi-Fi UDP commands:
+
+```txt
+wt ble on
+wt ble off
+wt mode ble
+wt mode wifi
+wt mode idle
+wt mode both
+```
+
+BLE can be turned off from BLE too. In that case the firmware sends the command response first, waits `WT_BLE_SELF_STOP_DELAY_MS`, then disconnects and stops advertising.
+
+UART/RTT remains the safest local supervisory interface when testing radio toggles because it can bring either radio back up:
+
+```txt
+wt wifi on
+wt wifi off
+wt ble on
+wt ble off
+```

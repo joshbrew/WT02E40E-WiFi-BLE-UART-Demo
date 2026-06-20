@@ -298,7 +298,7 @@
       </div>
 
       <p class="small">
-        Recommended: connect, enable command response notifications, then send commands. Status notifications only ping when enabled.
+        Recommended: connect, enable command response notifications, then send commands. Status notifications only ping when enabled. Turning BLE off from this page is allowed; the board will acknowledge first, then disconnect.
       </p>
 
       <h2>Command write</h2>
@@ -385,6 +385,34 @@
         <button id="makeWifiTxBtn" disabled>Ask board to UDP TX to this page</button>
       </div>
 
+
+      <h2>Wi-Fi command channel</h2>
+      <div class="stack">
+        <div class="small">
+          Send commands to the WT02E40E over Wi-Fi UDP. Firmware listens on command port <strong id="boardCmdPortLabel">5001</strong> and replies back to this Node page.
+        </div>
+        <div class="three">
+          <label>
+            Board IP
+            <input id="boardIpInput" placeholder="192.168.1.123">
+          </label>
+          <label>
+            Cmd port
+            <input id="boardCmdPortInput" value="5001">
+          </label>
+          <button id="sendWifiCommandBtn">Send Wi-Fi command</button>
+        </div>
+        <label>
+          Wi-Fi command
+          <textarea id="wifiCommandInput" spellcheck="false" placeholder="status&#10;wifi status&#10;tx uart hello from wifi command"></textarea>
+        </label>
+        <div class="row">
+          <button id="copyBleCmdToWifiBtn">Copy BLE command here</button>
+          <button id="useSelectedTemplateWifiBtn">Use selected template</button>
+          <button id="wifiCmdStatusBtn">wifi cmd status</button>
+        </div>
+      </div>
+
       <h2>Optional UDP send from Node</h2>
       <div class="stack">
         <div class="three">
@@ -420,12 +448,13 @@
         <summary>All supported command shapes</summary>
         <ul class="cmdList">
           <li><code>status</code> or <code>wt status</code>, prints full mode/BLE/Wi-Fi uptime status.</li>
-          <li><code>mode idle</code>, disables BLE advertising and Wi-Fi request state.</li>
+          <li><code>mode idle</code>, disables BLE advertising and Wi-Fi request state. From BLE, this responds first and then disconnects.</li>
           <li><code>mode ble</code>, BLE only. This is the default boot mode.</li>
           <li><code>mode wifi</code>, Wi-Fi only.</li>
           <li><code>mode both</code>, BLE plus Wi-Fi.</li>
-          <li><code>ble on</code>, <code>ble off</code>, <code>ble status</code>.</li>
+          <li><code>ble on</code>, <code>ble off</code>, <code>ble status</code>. From BLE, <code>ble off</code> responds first and then disconnects.</li>
           <li><code>wifi on</code>, <code>wifi off</code>, <code>wifi status</code>, <code>wifi reconnect</code>.</li>
+          <li><code>wifi cmd on</code>, <code>wifi cmd off</code>, <code>wifi cmd status</code>, controls the UDP command listener, default port 5001.</li>
           <li><code>wifi cred list</code>, lists stored runtime credentials.</li>
           <li><code>wifi cred set &lt;ssid&gt; &lt;password&gt; [wpa2|auto|wpa3]</code>, clears runtime credentials and stores/selects one secured network.</li>
           <li><code>wifi cred add &lt;ssid&gt; &lt;password&gt; [wpa2|auto|wpa3]</code>, adds another secured network.</li>
@@ -453,7 +482,7 @@
   <script>
     "use strict";
 
-    const WEBAPP_VERSION = "2026-06-20-command-log-order-v4";
+    const WEBAPP_VERSION = "2026-06-20-radio-toggle-v6";
 
     const UUIDS = {
       service: "7f1c0001-2b5a-4f2d-9a31-d6a5f4e040e1",
@@ -470,16 +499,20 @@
 
       { group: "Modes", name: "Idle mode", cmd: "mode idle", desc: "Disable active radio modes." },
       { group: "Modes", name: "BLE only", cmd: "mode ble", desc: "BLE command/status mode, no Wi-Fi request." },
-      { group: "Modes", name: "Wi-Fi only", cmd: "mode wifi", desc: "Wi-Fi mode without BLE staying intentionally active." },
+      { group: "Modes", name: "Wi-Fi only", cmd: "mode wifi", desc: "Wi-Fi mode without BLE staying intentionally active. From BLE, this will disconnect BLE after response." },
+      { group: "Modes", name: "Wi-Fi only, BLE off", cmd: "mode wifi", desc: "Turn Wi-Fi on and turn BLE off. Use UART or Wi-Fi command to turn BLE back on." },
       { group: "Modes", name: "BLE + Wi-Fi", cmd: "mode both", desc: "Keep BLE command channel available while Wi-Fi runs." },
 
       { group: "BLE", name: "BLE on", cmd: "ble on", desc: "Start BLE advertising if not connected." },
-      { group: "BLE", name: "BLE off", cmd: "ble off", desc: "Stop BLE advertising/disable BLE app mode." },
+      { group: "BLE", name: "BLE off", cmd: "ble off", desc: "Stop BLE from any transport. From BLE, response is sent first, then the link disconnects." },
       { group: "BLE", name: "BLE TX test", cmd: "tx ble hello from the web console", desc: "Notify a BLE TX message to subscribed clients." },
 
       { group: "Wi-Fi", name: "Wi-Fi on", cmd: "wifi on", desc: "Start Wi-Fi connection using stored or compiled credentials." },
       { group: "Wi-Fi", name: "Wi-Fi off", cmd: "wifi off", desc: "Stop Wi-Fi request state." },
       { group: "Wi-Fi", name: "Wi-Fi reconnect", cmd: "wifi reconnect", desc: "Restart Wi-Fi connection attempt." },
+      { group: "Wi-Fi", name: "Wi-Fi command status", cmd: "wifi cmd status", desc: "Check the UDP command listener state/port." },
+      { group: "Wi-Fi", name: "Wi-Fi command on", cmd: "wifi cmd on", desc: "Enable UDP command receive on the board." },
+      { group: "Wi-Fi", name: "Wi-Fi command off", cmd: "wifi cmd off", desc: "Disable UDP command receive on the board." },
       { group: "Wi-Fi", name: "List credentials", cmd: "wifi cred list", desc: "List runtime Wi-Fi credentials known to firmware." },
       { group: "Wi-Fi", name: "Set secured Wi-Fi", cmd: "wifi cred set YOUR_SSID YOUR_PASSWORD wpa2", desc: "Replace runtime credentials with one WPA2 network." },
       { group: "Wi-Fi", name: "Add secured Wi-Fi", cmd: "wifi cred add YOUR_SSID YOUR_PASSWORD auto", desc: "Add another runtime credential without clearing all." },
@@ -491,9 +524,12 @@
       { group: "Transmit", name: "Wi-Fi UDP TX", cmd: "tx wifi HOST_IP 5000 hello from WT02E40E over UDP", desc: "Send a UDP packet from the board to a target IPv4/port." },
       { group: "Transmit", name: "Combined TX", cmd: "tx both HOST_IP 5000 hello over the combined transmit path", desc: "Use the firmware combined transmit command." },
 
-      { group: "Bring-up", name: "Configure and enable Wi-Fi", cmd: "mode both\nwifi cred set YOUR_SSID YOUR_PASSWORD wpa2\nwifi on\nwifi status", desc: "Common bring-up sequence with BLE still available." },
+      { group: "Bring-up", name: "Configure and enable Wi-Fi", cmd: "mode both\nwifi cred set YOUR_SSID YOUR_PASSWORD wpa2\nwifi on\nwifi cmd on\nwifi status", desc: "Common bring-up sequence with BLE and Wi-Fi command server available." },
       { group: "Bring-up", name: "Send board UDP to this page", cmd: "tx wifi HOST_IP 5000 hello from WT02E40E over UDP", desc: "Use Node's UDP listener as the packet target." },
-      { group: "Bring-up", name: "Ping all status paths", cmd: "status\nble status\nwifi status\nwifi cred list", desc: "Small diagnostic batch." }
+      { group: "Bring-up", name: "Ping all status paths", cmd: "status\nble status\nwifi status\nwifi cmd status\nwifi cred list", desc: "Small diagnostic batch." },
+      { group: "Wi-Fi Command", name: "Wi-Fi command status over Wi-Fi", cmd: "wifi cmd status", desc: "Send this through the Wi-Fi command panel to test the UDP command path." },
+      { group: "Wi-Fi Command", name: "Status over Wi-Fi", cmd: "status", desc: "Send this through the Wi-Fi command panel to get status over UDP." },
+      { group: "Wi-Fi Command", name: "UART TX over Wi-Fi", cmd: "tx uart hello from wifi command", desc: "Send UART text by issuing a command over Wi-Fi UDP." }
     ];
 
     const COMMON_TEMPLATE_NAMES = [
@@ -501,8 +537,10 @@
       "BLE + Wi-Fi",
       "Configure and enable Wi-Fi",
       "Send board UDP to this page",
+      "Wi-Fi command status",
       "UART TX",
-      "BLE TX test"
+      "BLE TX test",
+      "BLE off"
     ];
 
     const state = {
@@ -540,6 +578,8 @@
       "clearCommandBtn", "insertTemplateBtn", "templateSelect", "templateDescription",
       "sendTemplateBtn", "commonTemplateButtons", "ssidInput", "passwordInput",
       "securityInput", "setCredBtn", "udpPort", "hostIpSelect", "wifiMessageInput",
+      "boardCmdPortLabel", "boardIpInput", "boardCmdPortInput", "wifiCommandInput",
+      "sendWifiCommandBtn", "copyBleCmdToWifiBtn", "useSelectedTemplateWifiBtn", "wifiCmdStatusBtn",
       "makeWifiTxBtn", "udpTargetHost", "udpTargetPort", "udpSendText", "sendUdpBtn",
       "log", "clearLogBtn", "copyLogBtn", "clearUdpBtn"
     ]) {
@@ -607,6 +647,10 @@
 
     function selectedUdpPort() {
       return String(state.config?.udpPort || Number(el.udpTargetPort.value) || 5000);
+    }
+
+    function selectedBoardCmdPort() {
+      return Number(el.boardCmdPortInput?.value || state.config?.boardCommandPort || 5001);
     }
 
     function hydrateTemplateCommand(command) {
@@ -973,6 +1017,12 @@
 
         el.udpPort.textContent = String(state.config.udpPort);
         el.udpState.textContent = `:${state.config.udpPort}`;
+        if (el.boardCmdPortLabel) {
+          el.boardCmdPortLabel.textContent = String(state.config.boardCommandPort || 5001);
+        }
+        if (el.boardCmdPortInput && !el.boardCmdPortInput.value) {
+          el.boardCmdPortInput.value = String(state.config.boardCommandPort || 5001);
+        }
 
         el.hostIpSelect.innerHTML = "";
         for (const address of state.config.addresses) {
@@ -1024,6 +1074,9 @@
         const msg = JSON.parse(event.data);
 
         if (msg.type === "udp_rx") {
+          if (el.boardIpInput && msg.address && !el.boardIpInput.value) {
+            el.boardIpInput.value = msg.address;
+          }
           log(`UDP <= ${msg.from} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
         } else if (msg.type === "udp_tx") {
           log(`UDP => ${msg.to} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
@@ -1035,6 +1088,39 @@
           log(`EVENT  ${JSON.stringify(msg)}`, "node");
         }
       };
+    }
+
+    async function sendWifiCommandFromNode() {
+      const host = el.boardIpInput.value.trim();
+      const port = selectedBoardCmdPort();
+      const text = el.wifiCommandInput.value.trim();
+
+      if (!host) {
+        log("Board IP is empty. Fill it from the device status / router / UDP sender.", "warn");
+        return;
+      }
+
+      if (!text) {
+        log("Wi-Fi command is empty", "warn");
+        return;
+      }
+
+      try {
+        log(`WIFI CMD => ${host}:${port} ${text}`, "cmd");
+        const res = await fetch("/api/udp/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ host, port, text })
+        });
+
+        const data = await res.json();
+
+        if (!data.ok) {
+          log(`Wi-Fi command UDP send failed: ${data.error}`, "error");
+        }
+      } catch (err) {
+        log(`Wi-Fi command UDP send failed: ${err.message}`, "error");
+      }
     }
 
     async function sendUdpFromNode() {
@@ -1128,6 +1214,20 @@
 
     el.makeWifiTxBtn.addEventListener("click", () => {
       writeCommand(buildWifiTxCommand());
+    });
+
+    el.sendWifiCommandBtn.addEventListener("click", sendWifiCommandFromNode);
+    el.copyBleCmdToWifiBtn.addEventListener("click", () => {
+      el.wifiCommandInput.value = el.commandInput.value;
+      el.wifiCommandInput.focus();
+    });
+    el.useSelectedTemplateWifiBtn.addEventListener("click", () => {
+      el.wifiCommandInput.value = hydrateTemplateCommand(selectedTemplate().cmd);
+      el.wifiCommandInput.focus();
+    });
+    el.wifiCmdStatusBtn.addEventListener("click", () => {
+      el.wifiCommandInput.value = "wifi cmd status";
+      sendWifiCommandFromNode();
     });
 
     el.sendUdpBtn.addEventListener("click", sendUdpFromNode);

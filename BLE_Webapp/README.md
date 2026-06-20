@@ -201,3 +201,33 @@ It also adds no-cache headers and a version string to `/api/config`, which makes
 ## Webapp version notes
 
 `2026-06-20-command-log-order-v4` logs `CMD => ...` before awaiting the BLE write. That keeps command/response/TX output readable even when the device responds immediately and browser notification events arrive before `writeValue*()` resolves.
+
+
+## Wi-Fi command channel
+
+Firmware now listens for UDP commands on board port `5001` when Wi-Fi command receive is enabled. The Node webapp sends UDP packets from its listener socket, so replies come back into the same browser log.
+
+Flow:
+
+```text
+Browser -> Node /api/udp/send -> UDP -> WT02E40E:5001
+WT02E40E -> UDP response -> Node UDP listener -> browser event log
+```
+
+Useful commands:
+
+```text
+wifi cmd status
+wifi cmd on
+wifi cmd off
+status
+wifi status
+tx uart hello from wifi command
+tx ble hello from wifi command
+tx wifi <computer-ip> 5000 hello back to node
+```
+
+
+## BLE self-off note
+
+The webapp can send `ble off`, `mode idle`, or `mode wifi` over the BLE command characteristic. The firmware responds first, then drops the BLE connection after a short delay. Use UART/RTT or the Wi-Fi UDP command panel to turn BLE back on after that.

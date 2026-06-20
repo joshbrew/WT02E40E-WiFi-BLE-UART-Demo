@@ -28,6 +28,7 @@ const args = parseArgs(process.argv.slice(2));
 
 const HTTP_PORT = numberArg(args.http, 8080);
 const UDP_PORT = numberArg(args.udp, 5000);
+const BOARD_CMD_PORT = numberArg(args.cmd, 5001);
 const HOST = args.host || "0.0.0.0";
 const ROOT = __dirname;
 const WEBAPP_VERSION = "2026-06-20-read-status-lock-v3";
@@ -80,6 +81,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, {
         httpPort: HTTP_PORT,
         udpPort: UDP_PORT,
+        boardCommandPort: BOARD_CMD_PORT,
         host: HOST,
         addresses: getLanAddresses(),
         version: WEBAPP_VERSION
@@ -149,7 +151,8 @@ server.listen(HTTP_PORT, HOST, () => {
   const addresses = getLanAddresses();
   for (const address of addresses) {
     console.log(`[http] LAN URL http://${address}:${HTTP_PORT}`);
-    console.log(`[udp]  WT command target ${address} ${UDP_PORT}`);
+    console.log(`[udp]  WT outbound target ${address} ${UDP_PORT}`);
+    console.log(`[udp]  WT Wi-Fi command server default target <board-ip> ${BOARD_CMD_PORT}`);
   }
 });
 

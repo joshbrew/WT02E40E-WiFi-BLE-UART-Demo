@@ -40,6 +40,7 @@ static char ble_cmd_buf[WT_BLE_CMD_TEXT_MAX];
 static char ble_cmd_rsp_buf[WT_BLE_CMD_RSP_TEXT_MAX];
 static struct k_work_delayable ble_status_ping_work;
 static struct k_work_delayable ble_adv_restart_work;
+static struct k_work_delayable ble_self_stop_work;
 
 #define WT_BT_UUID_SERVICE_VAL \
 	BT_UUID_128_ENCODE(0x7f1c0001, 0x2b5a, 0x4f2d, 0x9a31, 0xd6a5f4e040e1)
@@ -63,8 +64,10 @@ static int wt_ble_command_execute(const char *line);
 static void wt_ble_status_ping_work_handler(struct k_work *work);
 static void wt_ble_status_reschedule(void);
 static void wt_ble_adv_restart_work_handler(struct k_work *work);
+static void wt_ble_self_stop_work_handler(struct k_work *work);
 static int wt_ble_advertising_start(void);
 static void wt_ble_schedule_advertising_restart(void);
+static int wt_ble_schedule_self_stop_response(const char *rsp);
 static size_t wt_ble_notify_payload_max(void);
 static int wt_ble_notify_chunked(const struct bt_gatt_attr *attr,
 					 const uint8_t *data, size_t len);
@@ -288,6 +291,17 @@ static int wt_ble_rsp_send(const char *fmt, ...)
 }
 
 
+static int wt_ble_schedule_self_stop_response(const char *rsp)
+{
+	int ret;
+
+	ret = wt_ble_rsp_send("%s", rsp);
+	LOG_INF("BLE self-stop scheduled in %u ms", WT_BLE_SELF_STOP_DELAY_MS);
+	k_work_schedule(&ble_self_stop_work, K_MSEC(WT_BLE_SELF_STOP_DELAY_MS));
+
+	return ret;
+}
+
 
 static const struct bt_data ble_ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -313,8 +327,10 @@ static int build_status_payload(char *buf, size_t size)
 	}
 
 	len = snprintk(buf, size,
-			"WT02E40E status: mode=%s ble=%s adv=%s tx_notify=%s status_notify=%s cmd_rsp_notify=%s wifi_req=%s wifi_assoc=%s ipv4=%s wifi_cmd=%s cmd_port=%u uptime=%llds",
+			"WT02E40E status: mode=%s ble=%s ready=%s conn=%s adv=%s tx_notify=%s status_notify=%s cmd_rsp_notify=%s wifi_req=%s wifi_assoc=%s ipv4=%s wifi_cmd=%s cmd_port=%u uptime=%llds",
 			mode,
+			wt_onoff_txt(ble_requested),
+			wt_onoff_txt(ble_ready),
 			wt_onoff_txt(ble_connected_state),
 			wt_onoff_txt(ble_advertising),
 			wt_onoff_txt(ble_tx_notify_enabled),
@@ -644,6 +660,28 @@ static int wt_ble_command_execute(const char *line)
 		if (argc < 2) {
 			return wt_ble_rsp_send("usage mode idle|ble|wifi|both");
 		}
+
+		/*
+		 * If a BLE-origin command turns BLE off, answer first and then drop
+		 * the link from a delayed work item. Otherwise the connection can die
+		 * before the command response notification reaches the browser/phone.
+		 */
+		if (!strcmp(argv[1], "idle") || !strcmp(argv[1], "off")) {
+			ret = wt_wifi_service_set(false);
+			if (ret) {
+				return wt_ble_rsp_send("err wifi off %d", ret);
+			}
+			return wt_ble_schedule_self_stop_response("ok mode idle; BLE disconnecting");
+		}
+
+		if (!strcmp(argv[1], "wifi") || !strcmp(argv[1], "wi-fi")) {
+			ret = wt_wifi_service_set(true);
+			if (ret) {
+				return wt_ble_rsp_send("err wifi on %d", ret);
+			}
+			return wt_ble_schedule_self_stop_response("ok mode wifi; BLE disconnecting");
+		}
+
 		ret = wt_radio_mode_apply(argv[1]);
 		return ret ? wt_ble_rsp_send("err mode %d", ret) : wt_ble_rsp_send("ok mode %s", argv[1]);
 	}
@@ -661,8 +699,7 @@ static int wt_ble_command_execute(const char *line)
 			return ret ? wt_ble_rsp_send("err ble on %d", ret) : wt_ble_rsp_send("ok ble on");
 		}
 		if (!strcmp(argv[1], "off") || !strcmp(argv[1], "stop")) {
-			ret = wt_ble_service_stop();
-			return ret ? wt_ble_rsp_send("err ble off %d", ret) : wt_ble_rsp_send("ok ble off");
+			return wt_ble_schedule_self_stop_response("ok ble off; disconnecting");
 		}
 		if (!strcmp(argv[1], "status")) {
 			(void)build_status_payload(ble_status_buf, sizeof(ble_status_buf));
@@ -776,6 +813,13 @@ static void wt_ble_adv_restart_work_handler(struct k_work *work)
 	(void)wt_ble_advertising_start();
 }
 
+static void wt_ble_self_stop_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	(void)wt_ble_service_stop();
+}
+
 static void ble_connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err) {
@@ -825,12 +869,14 @@ void wt_ble_init(void)
 {
 	k_work_init_delayable(&ble_status_ping_work, wt_ble_status_ping_work_handler);
 	k_work_init_delayable(&ble_adv_restart_work, wt_ble_adv_restart_work_handler);
+	k_work_init_delayable(&ble_self_stop_work, wt_ble_self_stop_work_handler);
 }
 
 int wt_ble_service_start(void)
 {
 	int ret;
 
+	(void)k_work_cancel_delayable(&ble_self_stop_work);
 	ble_requested = true;
 
 	if (!ble_ready) {

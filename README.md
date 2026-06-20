@@ -8,6 +8,9 @@ The app starts in BLE-only mode by default, exposes a UART/RTT shell, exposes a 
 
 There's an additional BLE_Webapp you can use for quick testing if the programming was successful. You can server the server.js from Node or host the index.html yourself e.g. with the LiveServer extension on VSCode. Use Chrome for web BLE support.
 
+<img width="500" alt="rn_image_picker_lib_temp_8a1bb018-cece-4d18-a960-d8604912be75" src="https://github.com/user-attachments/assets/7c44a742-f9b0-41f6-8764-3b026d386278" />
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/a4b94aed-e316-48fd-9c9b-f96997f97339" />
+
 
 ## What this firmware does
 
@@ -79,30 +82,30 @@ If your custom board is powered from its own regulator instead, do not blindly t
 The carrier overlay maps the indicators as:
 
 ```txt
-Blue LED   P1.07
-Green LED  P0.10
+LED0   P1.07
+LED1   P0.10
 ```
 
 Blink meanings:
 
 ```txt
-Blue blinking   Firmware alive, BLE active/advertising, no BLE client connected
-Blue solid      BLE client connected
-Green off       Wi-Fi off or not associated
-Green blinking  Wi-Fi associated, waiting for IPv4/DHCP
-Green solid     Wi-Fi connected and IPv4 bound
+LED0 blinking   Firmware alive, BLE active/advertising, no BLE client connected
+LED0 solid      BLE client connected
+LED1 off       Wi-Fi off or not associated
+LED1 blinking  Wi-Fi associated, waiting for IPv4/DHCP
+LED1 solid     Wi-Fi connected and IPv4 bound
 ```
 
 Normal first boot without a BLE client should be:
 
 ```txt
-Blue blinking, green off
+LED0 blinking, green off
 ```
 
 After connecting from a phone with nRF Connect:
 
 ```txt
-Blue solid, green off
+LED0 solid, green off
 ```
 
 ## UART shell pins
@@ -110,8 +113,8 @@ Blue solid, green off
 The app enables a UART shell on the carrier UART nets:
 
 ```txt
-nRF P1.04 UART_TX -> host PA23/RX1 net
-nRF P1.06 UART_RX -> host PA22/TX1 net
+nRF P1.04 UART_TX -> host RX net
+nRF P1.06 UART_RX -> host TX net
 GND               -> host/debug UART GND
 Baud              -> 115200 8N1
 ```
@@ -182,6 +185,35 @@ CONFIG_WT02E40E_DEFAULT_BOTH=y
 ```
 
 Only one should be selected.
+
+
+## BLE self-disable behavior
+
+BLE can be enabled or disabled from any command transport:
+
+```text
+wt ble on
+wt ble off
+wt mode ble
+wt mode wifi
+wt mode idle
+wt mode both
+```
+
+From UART or RTT, `wt ble off` stops BLE immediately. From the BLE command characteristic, `ble off`, `mode idle`, and `mode wifi` first send a command response and then drop the BLE connection after `WT_BLE_SELF_STOP_DELAY_MS`. This makes it possible to turn BLE off from BLE without losing the acknowledgement packet first.
+
+This means UART can be used as the local supervisory path for both radios:
+
+```text
+wt wifi on
+wt wifi off
+wt ble on
+wt ble off
+wt mode idle
+wt mode ble
+wt mode wifi
+wt mode both
+```
 
 ## Wi-Fi antenna note
 
@@ -303,7 +335,7 @@ Command response UUID:    7f1c0005-2b5a-4f2d-9a31-d6a5f4e040e1
 The status characteristic can be read immediately. Example payload:
 
 ```txt
-WT02E40E status: mode=ble ble=on adv=off tx_notify=off status_notify=off cmd_rsp_notify=off wifi_req=off wifi_assoc=off ipv4=off uptime=12s
+WT02E40E status: mode=ble ble=on ready=on conn=on adv=off tx_notify=off status_notify=off cmd_rsp_notify=off wifi_req=off wifi_assoc=off ipv4=off wifi_cmd=on cmd_port=5001 uptime=12s
 ```
 
 The periodic status ping only runs when:
@@ -369,7 +401,7 @@ src/wt_wifi.c     Wi-Fi prep, connect loop, DHCP events, credentials, UDP TX
 src/wt_ble.c      BLE advertising, GATT TX/status/command characteristics
 src/wt_shell.c    UART/RTT wt commands
 src/wt_radio.c    Radio mode switching: idle, ble, wifi, both
-src/wt_leds.c     Blue/green LED status thread
+src/wt_leds.c     LED0/LED1 LED status thread
 src/wt_common.c   Shared parsing/helpers
 src/wt_config.h   App constants and local limits
 ```
@@ -426,7 +458,7 @@ WT02E40E-CMD
 
 Use the nRF Connect scanner, not the phone OS Bluetooth pairing screen.
 
-### Blue LED blinks forever
+### LED0 blinks forever
 
 That is normal when BLE is advertising and no BLE client is connected.
 
@@ -444,16 +476,16 @@ mode wifi
 wifi status
 ```
 
-### Green never lights
+### LED1 never lights
 
-Green is only for Wi-Fi state. With no Wi-Fi antenna, bad credentials, or Wi-Fi disabled, green may stay off forever.
+LED1 is only for Wi-Fi state. With no Wi-Fi antenna, bad credentials, or Wi-Fi disabled, green may stay off forever.
 
 Expected Wi-Fi LED states:
 
 ```txt
-Green off       Wi-Fi off or not associated
-Green blinking  Associated, waiting for IPv4
-Green solid     IPv4 bound
+LED1 off       Wi-Fi off or not associated
+LED1 blinking  Associated, waiting for IPv4
+LED1 solid     IPv4 bound
 ```
 
 ### UART shell does not respond
@@ -520,3 +552,58 @@ wifi cmd off
 ```
 
 The board listens on UDP port `5001` once Wi-Fi has IPv4. The included `BLE_Webapp` Node server listens on UDP port `5000`, sends Wi-Fi command packets to the board, and streams board responses into the browser log.
+
+### Example: Send a UART message out over BLE
+
+This test sends a message from the UART/RTT shell on the WT02E40E and receives it on a BLE client.
+
+1. Connect to the device over BLE.
+
+   Device name:
+
+   ```txt
+   WT02E40E-CMD
+   ```
+
+2. Enable notifications on the BLE TX characteristic.
+
+   ```txt
+   TX notify UUID:
+   7f1c0002-2b5a-4f2d-9a31-d6a5f4e040e1
+   ```
+
+   In the BLE webapp, click:
+
+   ```txt
+   Toggle BLE TX notifications
+   ```
+
+   Make sure it shows:
+
+   ```txt
+   TX notify: on
+   ```
+
+3. Open the UART shell.
+
+   ```txt
+   Baud: 115200 8N1
+   ```
+
+   RTT shell also works if UART is not connected.
+
+4. Send a BLE TX message from UART.
+
+   ```txt
+   wt tx ble hello from uart
+   ```
+
+5. Confirm the BLE client receives it.
+
+   In the webapp log you should see:
+
+   ```txt
+   TX <= hello from uart
+   ```
+
+If the UART command returns `-13` or says TX notify is off, the BLE client is connected but has not enabled notifications on the TX characteristic yet.
