@@ -196,3 +196,45 @@ src/wt_config.h   Local app constants.
 ```
 
 `main.c` should stay boring. If behavior changes, it probably belongs in the radio, Wi-Fi, BLE, shell, or LED module instead.
+
+## Wi-Fi UDP command receive
+
+The firmware now supports a third command path over Wi-Fi UDP.
+
+```text
+Default board command port: 5001
+Node/webapp receive port:  5000
+```
+
+Once Wi-Fi is connected and IPv4 is bound, the board listens for one-line command packets on UDP port `5001`. It executes the same command grammar used by BLE command writes and replies to the sender address/port.
+
+Control commands:
+
+```text
+wifi cmd status
+wifi cmd on
+wifi cmd off
+```
+
+Examples from the Node webapp Wi-Fi command panel:
+
+```text
+status
+wifi status
+wifi cred list
+tx uart hello from wifi command
+tx ble hello from wifi command
+tx wifi <computer-ip> 5000 hello back to Node
+```
+
+Recommended three-way bring-up:
+
+```text
+mode both
+wifi cred set <ssid> <password> wpa2
+wifi on
+wifi cmd on
+wifi status
+```
+
+Then send commands either over BLE, UART shell, or Wi-Fi UDP to `<board-ip>:5001`.

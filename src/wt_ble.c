@@ -313,7 +313,7 @@ static int build_status_payload(char *buf, size_t size)
 	}
 
 	len = snprintk(buf, size,
-			"WT02E40E status: mode=%s ble=%s adv=%s tx_notify=%s status_notify=%s cmd_rsp_notify=%s wifi_req=%s wifi_assoc=%s ipv4=%s uptime=%llds",
+			"WT02E40E status: mode=%s ble=%s adv=%s tx_notify=%s status_notify=%s cmd_rsp_notify=%s wifi_req=%s wifi_assoc=%s ipv4=%s wifi_cmd=%s cmd_port=%u uptime=%llds",
 			mode,
 			wt_onoff_txt(ble_connected_state),
 			wt_onoff_txt(ble_advertising),
@@ -323,6 +323,8 @@ static int build_status_payload(char *buf, size_t size)
 			wt_onoff_txt(wt_wifi_is_requested()),
 			wt_onoff_txt(wt_wifi_is_associated()),
 			wt_onoff_txt(wt_wifi_has_ipv4()),
+			wt_onoff_txt(wt_wifi_cmd_is_enabled()),
+			wt_wifi_cmd_port(),
 			(long long)(k_uptime_get() / 1000));
 
 	if (len < 0) {
@@ -337,6 +339,11 @@ static int build_status_payload(char *buf, size_t size)
 	return len;
 }
 
+
+int wt_ble_status_format(char *buf, size_t size)
+{
+	return build_status_payload(buf, size);
+}
 
 static int wt_ble_split_args(char *line, char **argv, size_t argv_max)
 {
@@ -546,7 +553,7 @@ static int wt_ble_command_wifi(char **argv, size_t argc)
 	int ret;
 
 	if (argc < 2) {
-		return wt_ble_rsp_send("usage wifi on|off|status|reconnect|cred");
+		return wt_ble_rsp_send("usage wifi on|off|status|reconnect|cmd|cred");
 	}
 
 	if (!strcmp(argv[1], "on") || !strcmp(argv[1], "start")) {
@@ -572,11 +579,28 @@ static int wt_ble_command_wifi(char **argv, size_t argc)
 		return ret ? wt_ble_rsp_send("err wifi reconnect %d", ret) : wt_ble_rsp_send("ok wifi reconnect");
 	}
 
+	if (!strcmp(argv[1], "cmd") || !strcmp(argv[1], "command") || !strcmp(argv[1], "commands")) {
+		if (argc < 3 || !strcmp(argv[2], "status")) {
+			return wt_ble_rsp_send("ok wifi cmd %s port %u",
+					      wt_onoff_txt(wt_wifi_cmd_is_enabled()), wt_wifi_cmd_port());
+		}
+		if (!strcmp(argv[2], "on") || !strcmp(argv[2], "start")) {
+			ret = wt_wifi_cmd_service_set(true);
+			return ret ? wt_ble_rsp_send("err wifi cmd on %d", ret) :
+				     wt_ble_rsp_send("ok wifi cmd on port %u", wt_wifi_cmd_port());
+		}
+		if (!strcmp(argv[2], "off") || !strcmp(argv[2], "stop")) {
+			ret = wt_wifi_cmd_service_set(false);
+			return ret ? wt_ble_rsp_send("err wifi cmd off %d", ret) : wt_ble_rsp_send("ok wifi cmd off");
+		}
+		return wt_ble_rsp_send("usage wifi cmd on|off|status");
+	}
+
 	if (!strcmp(argv[1], "cred") || !strcmp(argv[1], "creds")) {
 		return wt_ble_command_wifi_cred(argv, argc);
 	}
 
-	return wt_ble_rsp_send("usage wifi on|off|status|reconnect|cred");
+	return wt_ble_rsp_send("usage wifi on|off|status|reconnect|cmd|cred");
 }
 
 static int wt_ble_command_execute(const char *line)
@@ -608,7 +632,7 @@ static int wt_ble_command_execute(const char *line)
 	}
 
 	if (!strcmp(argv[0], "help") || !strcmp(argv[0], "?")) {
-		return wt_ble_rsp_send("cmds: status, mode idle|ble|wifi|both, wifi ..., ble ..., tx ble|uart|wifi|both ...");
+		return wt_ble_rsp_send("cmds: status, mode idle|ble|wifi|both, wifi on|off|status|cmd|cred, ble ..., tx ...");
 	}
 
 	if (!strcmp(argv[0], "status")) {

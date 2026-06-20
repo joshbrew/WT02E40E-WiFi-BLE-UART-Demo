@@ -25,6 +25,10 @@ int wt_wifi_credentials_shell(const struct shell *sh, size_t argc, char **argv);
 int wt_wifi_reconnect_if_requested(void);
 int wt_wifi_udp_transmit_payload(const char *ip_text, const char *port_text,
 					const uint8_t *data, size_t len);
+int wt_wifi_cmd_service_set(bool enable);
+bool wt_wifi_cmd_is_enabled(void);
+uint16_t wt_wifi_cmd_port(void);
+int wt_wifi_command_execute(const char *line, char *rsp, size_t rsp_len);
 
 #ifdef CONFIG_WIFI_READY_LIB
 int wt_wifi_register_ready_callback(void);

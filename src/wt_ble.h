@@ -17,5 +17,6 @@ void wt_ble_init(void);
 int wt_ble_service_start(void);
 int wt_ble_service_stop(void);
 int wt_ble_transmit_payload(const uint8_t *data, size_t len);
+int wt_ble_status_format(char *buf, size_t size);
 
 #endif /* WT_BLE_H */

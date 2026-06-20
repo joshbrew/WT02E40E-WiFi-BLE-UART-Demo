@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,7 @@ LOG_MODULE_REGISTER(wt_wifi, CONFIG_LOG_DEFAULT_LEVEL);
 #include <zephyr/net/wifi_credentials.h>
 #include <zephyr/net/wifi_mgmt.h>
 #include <zephyr/shell/shell.h>
+#include <zephyr/sys/printk.h>
 #include <zephyr/sys/util.h>
 
 #ifdef CONFIG_WIFI_READY_LIB
@@ -30,8 +32,10 @@ LOG_MODULE_REGISTER(wt_wifi, CONFIG_LOG_DEFAULT_LEVEL);
 
 #include "net_private.h"
 
+#include "wt_ble.h"
 #include "wt_common.h"
 #include "wt_config.h"
+#include "wt_radio.h"
 #include "wt_wifi.h"
 
 #define WIFI_NODE DT_CHOSEN(zephyr_wifi)
@@ -50,6 +54,9 @@ static bool wifi_ready_status;
 
 static volatile bool wifi_requested;
 static bool wifi_prepared;
+static volatile bool wifi_cmd_enabled = true;
+
+static void wifi_cmd_thread(void *p1, void *p2, void *p3);
 
 static struct {
 	union {
@@ -77,6 +84,24 @@ bool wt_wifi_is_associated(void)
 bool wt_wifi_has_ipv4(void)
 {
 	return wifi_context.ipv4_bound;
+}
+
+int wt_wifi_cmd_service_set(bool enable)
+{
+	wifi_cmd_enabled = enable;
+	LOG_INF("Wi-Fi UDP command server %s on port %u",
+		wt_onoff_txt(enable), WT_WIFI_CMD_UDP_PORT);
+	return 0;
+}
+
+bool wt_wifi_cmd_is_enabled(void)
+{
+	return wifi_cmd_enabled;
+}
+
+uint16_t wt_wifi_cmd_port(void)
+{
+	return WT_WIFI_CMD_UDP_PORT;
 }
 
 static const char *wifi_security_name(enum wifi_security_type security)
@@ -854,6 +879,490 @@ void wt_wifi_start_worker(void)
 	k_thread_start(start_wifi_thread_id);
 }
 #endif
+
+
+static int wt_wifi_cmd_rsp(char *rsp, size_t rsp_len, const char *fmt, ...)
+{
+	va_list args;
+	int len;
+
+	if (!rsp || rsp_len == 0) {
+		return -EINVAL;
+	}
+
+	va_start(args, fmt);
+	len = vsnprintk(rsp, rsp_len, fmt, args);
+	va_end(args);
+
+	if (len < 0) {
+		rsp[0] = '\0';
+		return len;
+	}
+
+	if ((size_t)len >= rsp_len) {
+		rsp[rsp_len - 1] = '\0';
+		return rsp_len - 1;
+	}
+
+	return len;
+}
+
+static int wt_wifi_split_args(char *line, char **argv, size_t argv_max)
+{
+	char *p = line;
+	size_t argc = 0;
+
+	while (*p && argc < argv_max) {
+		while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+			*p++ = '\0';
+		}
+
+		if (!*p) {
+			break;
+		}
+
+		argv[argc++] = p;
+
+		while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
+			p++;
+		}
+	}
+
+	return (int)argc;
+}
+
+static int wt_wifi_status_format(char *buf, size_t size)
+{
+	const char *mode;
+	int len;
+
+	if (wt_wifi_is_requested() && wt_ble_is_requested()) {
+		mode = "both";
+	} else if (wt_wifi_is_requested()) {
+		mode = "wifi";
+	} else if (wt_ble_is_requested()) {
+		mode = "ble";
+	} else {
+		mode = "idle";
+	}
+
+	len = snprintk(buf, size,
+			"WT02E40E status: mode=%s ble=%s adv=%s tx_notify=%s status_notify=%s cmd_rsp_notify=%s wifi_req=%s wifi_assoc=%s ipv4=%s wifi_cmd=%s cmd_port=%u uptime=%llds",
+			mode,
+			wt_onoff_txt(wt_ble_is_connected()),
+			wt_onoff_txt(wt_ble_is_advertising()),
+			wt_onoff_txt(wt_ble_tx_notify_is_enabled()),
+			wt_onoff_txt(wt_ble_status_notify_is_enabled()),
+			wt_onoff_txt(wt_ble_cmd_response_notify_is_enabled()),
+			wt_onoff_txt(wt_wifi_is_requested()),
+			wt_onoff_txt(wt_wifi_is_associated()),
+			wt_onoff_txt(wt_wifi_has_ipv4()),
+			wt_onoff_txt(wt_wifi_cmd_is_enabled()),
+			wt_wifi_cmd_port(),
+			(long long)(k_uptime_get() / 1000));
+
+	if (len < 0) {
+		buf[0] = '\0';
+		return 0;
+	}
+
+	if ((size_t)len >= size) {
+		return size - 1;
+	}
+
+	return len;
+}
+
+static int wt_wifi_cmd_tx_uart_payload(char **argv, size_t argc, size_t payload_arg)
+{
+	int payload_len;
+	char payload[WT_TX_PAYLOAD_MAX];
+
+	payload_len = wt_build_payload_from_argv(payload_arg, argc, argv,
+					 payload, sizeof(payload));
+	if (payload_len < 0) {
+		return payload_len;
+	}
+
+	printk("WIFI UART TX: ");
+	for (int i = 0; i < payload_len; i++) {
+		printk("%c", payload[i]);
+	}
+	printk("\r\n");
+
+	return payload_len;
+}
+
+static int wt_wifi_command_tx(char **argv, size_t argc, char *rsp, size_t rsp_len)
+{
+	int payload_len;
+	int ret;
+	char payload[WT_TX_PAYLOAD_MAX];
+
+	if (argc < 3) {
+		return wt_wifi_cmd_rsp(rsp, rsp_len,
+					  "usage tx ble <msg> | tx uart <msg> | tx wifi <ip> <port> <msg> | tx both <ip> <port> <msg>");
+	}
+
+	if (!strcmp(argv[1], "ble") || !strcmp(argv[1], "bt")) {
+		payload_len = wt_build_payload_from_argv(2, argc, argv,
+						 payload, sizeof(payload));
+		if (payload_len < 0) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err payload %d", payload_len);
+		}
+
+		ret = wt_ble_transmit_payload((const uint8_t *)payload, payload_len);
+		if (ret == -EACCES) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err ble tx notify off; enable TX notify first");
+		}
+		if (ret == -ENOTCONN) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err ble tx not connected");
+		}
+		if (ret) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err ble tx %d", ret);
+		}
+
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok ble tx %d bytes", payload_len);
+	}
+
+	if (!strcmp(argv[1], "uart") || !strcmp(argv[1], "serial")) {
+		payload_len = wt_wifi_cmd_tx_uart_payload(argv, argc, 2);
+		if (payload_len < 0) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err uart payload %d", payload_len);
+		}
+
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok uart tx %d bytes", payload_len);
+	}
+
+	if (!strcmp(argv[1], "wifi") || !strcmp(argv[1], "udp")) {
+		if (argc < 5) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "usage tx wifi <ip> <port> <msg>");
+		}
+
+		payload_len = wt_build_payload_from_argv(4, argc, argv,
+						 payload, sizeof(payload));
+		if (payload_len < 0) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err payload %d", payload_len);
+		}
+
+		ret = wt_wifi_udp_transmit_payload(argv[2], argv[3],
+						       (const uint8_t *)payload, payload_len);
+		if (ret) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err wifi tx %d", ret);
+		}
+
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok wifi udp tx %d bytes to %s:%s",
+					      payload_len, argv[2], argv[3]);
+	}
+
+	if (!strcmp(argv[1], "both") || !strcmp(argv[1], "all")) {
+		if (argc < 5) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "usage tx both <ip> <port> <msg>");
+		}
+
+		payload_len = wt_build_payload_from_argv(4, argc, argv,
+						 payload, sizeof(payload));
+		if (payload_len < 0) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err payload %d", payload_len);
+		}
+
+		ret = wt_wifi_udp_transmit_payload(argv[2], argv[3],
+						       (const uint8_t *)payload, payload_len);
+		if (ret) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err wifi tx %d", ret);
+		}
+
+		(void)wt_wifi_cmd_tx_uart_payload(argv, argc, 4);
+		ret = wt_ble_transmit_payload((const uint8_t *)payload, payload_len);
+		if (ret && ret != -EACCES) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err ble tx %d after wifi/uart", ret);
+		}
+
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok wifi+uart%s tx %d bytes%s",
+					      ret == -EACCES ? "" : "+ble", payload_len,
+					      ret == -EACCES ? " (ble notify off)" : "");
+	}
+
+	return wt_wifi_cmd_rsp(rsp, rsp_len, "usage tx ble|uart|wifi|both ...");
+}
+
+static int wt_wifi_command_cred(char **argv, size_t argc, char *rsp, size_t rsp_len)
+{
+	int ret;
+	char list[WT_WIFI_CMD_RSP_TEXT_MAX - 32];
+
+	if (argc < 3) {
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "usage wifi cred list|set|add|open|forget|clear");
+	}
+
+	if (!strcmp(argv[2], "list")) {
+		ret = wt_wifi_credentials_format_list(list, sizeof(list));
+		if (ret < 0) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err cred list %d", ret);
+		}
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok creds %s", list);
+	}
+
+	if (!strcmp(argv[2], "clear")) {
+		ret = wt_wifi_credentials_clear();
+		if (ret) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err cred clear %d", ret);
+		}
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok creds cleared");
+	}
+
+	if (!strcmp(argv[2], "forget")) {
+		if (argc < 4) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "usage wifi cred forget <ssid>");
+		}
+		ret = wt_wifi_credentials_forget(argv[3]);
+		if (ret) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err cred forget %d", ret);
+		}
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok forgot %s", argv[3]);
+	}
+
+	if (!strcmp(argv[2], "open")) {
+		if (argc < 4) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "usage wifi cred open <ssid>");
+		}
+		ret = wt_wifi_credentials_open(argv[3], true);
+		if (ret) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err cred open %d", ret);
+		}
+		(void)wt_wifi_reconnect_if_requested();
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok open ssid %s", argv[3]);
+	}
+
+	if (!strcmp(argv[2], "set") || !strcmp(argv[2], "add")) {
+		bool replace_all = !strcmp(argv[2], "set");
+		const char *security = argc >= 6 ? argv[5] : NULL;
+
+		if (argc < 5) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len,
+						  "usage wifi cred %s <ssid> <pass> [wpa2|auto|wpa3]", argv[2]);
+		}
+
+		ret = wt_wifi_credentials_set(argv[3], argv[4], security, replace_all);
+		if (ret) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err cred set %d", ret);
+		}
+		(void)wt_wifi_reconnect_if_requested();
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok %s ssid %s", replace_all ? "selected" : "added", argv[3]);
+	}
+
+	return wt_wifi_cmd_rsp(rsp, rsp_len, "usage wifi cred list|set|add|open|forget|clear");
+}
+
+static int wt_wifi_command_wifi(char **argv, size_t argc, char *rsp, size_t rsp_len)
+{
+	int ret;
+
+	if (argc < 2) {
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "usage wifi on|off|status|reconnect|cmd|cred");
+	}
+
+	if (!strcmp(argv[1], "on") || !strcmp(argv[1], "start")) {
+		ret = wt_wifi_service_set(true);
+		return ret ? wt_wifi_cmd_rsp(rsp, rsp_len, "err wifi on %d", ret) : wt_wifi_cmd_rsp(rsp, rsp_len, "ok wifi on");
+	}
+
+	if (!strcmp(argv[1], "off") || !strcmp(argv[1], "stop")) {
+		/* Reply before caller potentially loses the control path. */
+		ret = wt_wifi_service_set(false);
+		return ret ? wt_wifi_cmd_rsp(rsp, rsp_len, "err wifi off %d", ret) : wt_wifi_cmd_rsp(rsp, rsp_len, "ok wifi off");
+	}
+
+	if (!strcmp(argv[1], "status")) {
+		(void)wt_wifi_status_format(rsp, rsp_len);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "reconnect")) {
+		ret = wt_wifi_reconnect_if_requested();
+		if (!wt_wifi_is_requested()) {
+			ret = wt_wifi_service_set(true);
+		}
+		return ret ? wt_wifi_cmd_rsp(rsp, rsp_len, "err wifi reconnect %d", ret) : wt_wifi_cmd_rsp(rsp, rsp_len, "ok wifi reconnect");
+	}
+
+	if (!strcmp(argv[1], "cmd") || !strcmp(argv[1], "command") || !strcmp(argv[1], "commands")) {
+		if (argc < 3 || !strcmp(argv[2], "status")) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "ok wifi cmd %s port %u",
+					      wt_onoff_txt(wt_wifi_cmd_is_enabled()), wt_wifi_cmd_port());
+		}
+		if (!strcmp(argv[2], "on") || !strcmp(argv[2], "start")) {
+			ret = wt_wifi_cmd_service_set(true);
+			return ret ? wt_wifi_cmd_rsp(rsp, rsp_len, "err wifi cmd on %d", ret) :
+				     wt_wifi_cmd_rsp(rsp, rsp_len, "ok wifi cmd on port %u", wt_wifi_cmd_port());
+		}
+		if (!strcmp(argv[2], "off") || !strcmp(argv[2], "stop")) {
+			ret = wt_wifi_cmd_service_set(false);
+			return ret ? wt_wifi_cmd_rsp(rsp, rsp_len, "err wifi cmd off %d", ret) : wt_wifi_cmd_rsp(rsp, rsp_len, "ok wifi cmd off");
+		}
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "usage wifi cmd on|off|status");
+	}
+
+	if (!strcmp(argv[1], "cred") || !strcmp(argv[1], "creds")) {
+		return wt_wifi_command_cred(argv, argc, rsp, rsp_len);
+	}
+
+	return wt_wifi_cmd_rsp(rsp, rsp_len, "usage wifi on|off|status|reconnect|cmd|cred");
+}
+
+int wt_wifi_command_execute(const char *line, char *rsp, size_t rsp_len)
+{
+	char line_buf[WT_WIFI_CMD_RX_TEXT_MAX];
+	char *argv_storage[16];
+	char **argv = argv_storage;
+	int argc;
+	int ret;
+
+	if (!line || strlen(line) == 0) {
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "err empty command");
+	}
+
+	strncpy(line_buf, line, sizeof(line_buf) - 1);
+	line_buf[sizeof(line_buf) - 1] = '\0';
+
+	argc = wt_wifi_split_args(line_buf, argv_storage, ARRAY_SIZE(argv_storage));
+	if (argc <= 0) {
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "err empty command");
+	}
+
+	if (!strcmp(argv[0], "wt")) {
+		argv++;
+		argc--;
+		if (argc <= 0) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "usage wt status|mode|wifi|ble|tx|help");
+		}
+	}
+
+	if (!strcmp(argv[0], "help") || !strcmp(argv[0], "?")) {
+		return wt_wifi_cmd_rsp(rsp, rsp_len,
+					  "cmds: status, mode idle|ble|wifi|both, wifi on|off|status|cmd|cred, ble on|off|status, tx ble|uart|wifi|both");
+	}
+
+	if (!strcmp(argv[0], "status")) {
+		(void)wt_wifi_status_format(rsp, rsp_len);
+		return 0;
+	}
+
+	if (!strcmp(argv[0], "mode")) {
+		if (argc < 2) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "usage mode idle|ble|wifi|both");
+		}
+		ret = wt_radio_mode_apply(argv[1]);
+		return ret ? wt_wifi_cmd_rsp(rsp, rsp_len, "err mode %d", ret) : wt_wifi_cmd_rsp(rsp, rsp_len, "ok mode %s", argv[1]);
+	}
+
+	if (!strcmp(argv[0], "wifi")) {
+		return wt_wifi_command_wifi(argv, argc, rsp, rsp_len);
+	}
+
+	if (!strcmp(argv[0], "ble") || !strcmp(argv[0], "bt")) {
+		if (argc < 2) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "usage ble on|off|status");
+		}
+		if (!strcmp(argv[1], "on") || !strcmp(argv[1], "start")) {
+			ret = wt_ble_service_start();
+			return ret ? wt_wifi_cmd_rsp(rsp, rsp_len, "err ble on %d", ret) : wt_wifi_cmd_rsp(rsp, rsp_len, "ok ble on");
+		}
+		if (!strcmp(argv[1], "off") || !strcmp(argv[1], "stop")) {
+			ret = wt_ble_service_stop();
+			return ret ? wt_wifi_cmd_rsp(rsp, rsp_len, "err ble off %d", ret) : wt_wifi_cmd_rsp(rsp, rsp_len, "ok ble off");
+		}
+		if (!strcmp(argv[1], "status")) {
+			(void)wt_wifi_status_format(rsp, rsp_len);
+			return 0;
+		}
+		return wt_wifi_cmd_rsp(rsp, rsp_len, "usage ble on|off|status");
+	}
+
+	if (!strcmp(argv[0], "tx")) {
+		return wt_wifi_command_tx(argv, argc, rsp, rsp_len);
+	}
+
+	return wt_wifi_cmd_rsp(rsp, rsp_len, "err unknown command: %s", argv[0]);
+}
+
+static void wt_wifi_cmd_trim(char *buf)
+{
+	size_t len = strlen(buf);
+
+	while (len > 0 && (buf[len - 1] == '\r' || buf[len - 1] == '\n' ||
+			 buf[len - 1] == ' ' || buf[len - 1] == '\t')) {
+		buf[--len] = '\0';
+	}
+}
+
+static void wifi_cmd_thread(void *p1, void *p2, void *p3)
+{
+	struct sockaddr_in bind_addr = { 0 };
+	struct sockaddr_in peer;
+	socklen_t peer_len;
+	char cmd_buf[WT_WIFI_CMD_RX_TEXT_MAX];
+	char rsp_buf[WT_WIFI_CMD_RSP_TEXT_MAX];
+	int sock;
+	int ret;
+
+	ARG_UNUSED(p1);
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+	sock = zsock_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (sock < 0) {
+		LOG_ERR("Wi-Fi UDP command socket create failed: %d", errno);
+		return;
+	}
+
+	bind_addr.sin_family = AF_INET;
+	bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	bind_addr.sin_port = htons(WT_WIFI_CMD_UDP_PORT);
+
+	ret = zsock_bind(sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr));
+	if (ret < 0) {
+		LOG_ERR("Wi-Fi UDP command bind failed on port %u: %d", WT_WIFI_CMD_UDP_PORT, errno);
+		zsock_close(sock);
+		return;
+	}
+
+	LOG_INF("Wi-Fi UDP command server listening on port %u", WT_WIFI_CMD_UDP_PORT);
+
+	while (1) {
+		peer_len = sizeof(peer);
+		ret = zsock_recvfrom(sock, cmd_buf, sizeof(cmd_buf) - 1, 0,
+					     (struct sockaddr *)&peer, &peer_len);
+		if (ret < 0) {
+			LOG_WRN("Wi-Fi UDP command recv failed: %d", errno);
+			k_sleep(K_MSEC(250));
+			continue;
+		}
+
+		cmd_buf[ret] = '\0';
+		wt_wifi_cmd_trim(cmd_buf);
+
+		if (!wifi_cmd_enabled) {
+			(void)wt_wifi_cmd_rsp(rsp_buf, sizeof(rsp_buf), "err wifi cmd off");
+		} else if (!wt_wifi_is_requested() || !wt_wifi_has_ipv4()) {
+			(void)wt_wifi_cmd_rsp(rsp_buf, sizeof(rsp_buf),
+					      "err wifi command path not ready wifi_req=%s ipv4=%s",
+					      wt_onoff_txt(wt_wifi_is_requested()), wt_onoff_txt(wt_wifi_has_ipv4()));
+		} else {
+			LOG_INF("Wi-Fi UDP command: %s", cmd_buf);
+			ret = wt_wifi_command_execute(cmd_buf, rsp_buf, sizeof(rsp_buf));
+			if (ret < 0) {
+				LOG_WRN("Wi-Fi UDP command failed: %d", ret);
+			}
+		}
+
+		(void)zsock_sendto(sock, rsp_buf, strlen(rsp_buf), 0,
+					  (struct sockaddr *)&peer, peer_len);
+	}
+}
+
+K_THREAD_DEFINE(wifi_cmd_thread_id, WT_WIFI_CMD_THREAD_STACK_SIZE,
+		wifi_cmd_thread, NULL, NULL, NULL, WT_WIFI_CMD_THREAD_PRIORITY, 0, 0);
 
 int wt_wifi_udp_transmit_payload(const char *ip_text, const char *port_text,
 					const uint8_t *data, size_t len)

@@ -1,12 +1,8 @@
-# WT02E40E Wi-Fi + BLE + UART Command Bring-Up
+# WT02E40E Wi-Fi + BLE Command Bring-Up
 
 This project is a bring-up and command bridge application for a WT02E40E module, which combines an nRF5340 host MCU with an nRF7002 Wi-Fi companion.
 
-This was compiled successfully with the nRF Connect Toolchain ver v3.3.1 in VSCode.
-
 The app starts in BLE-only mode by default, exposes a UART/RTT shell, exposes a matching BLE command interface, and can turn Wi-Fi on later when the antenna and credentials are ready. It is based on Nordic's Wi-Fi station sample, but the application code has been split into smaller modules so the behavior is easier to trace.
-
-There's an additional BLE_Webapp you can use for quick testing if the programming was successful. You can server the server.js from Node or host the index.html yourself e.g. with the LiveServer extension on VSCode. Use Chrome for web BLE support.
 
 ## What this firmware does
 
@@ -499,3 +495,23 @@ http://localhost:8080
 ```
 
 The page connects to the command GATT service over Web Bluetooth and also opens a UDP listener through Node so Wi-Fi `tx wifi <host> <port> <message>` packets can show up in the browser log.
+
+## Three-way command bridge
+
+This build exposes the same high-level control path over three transports:
+
+```text
+BLE command characteristic  -> command response characteristic
+UART shell                  -> shell output
+Wi-Fi UDP command socket     -> UDP response packet
+```
+
+Wi-Fi command receive is enabled by default and can be controlled with:
+
+```text
+wifi cmd status
+wifi cmd on
+wifi cmd off
+```
+
+The board listens on UDP port `5001` once Wi-Fi has IPv4. The included `BLE_Webapp` Node server listens on UDP port `5000`, sends Wi-Fi command packets to the board, and streams board responses into the browser log.

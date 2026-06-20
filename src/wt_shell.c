@@ -22,6 +22,8 @@ static int shell_cmd_wt_status(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "  Wi-Fi requested: %s", wt_onoff_txt(wt_wifi_is_requested()));
 	shell_print(sh, "  Wi-Fi associated: %s", wt_onoff_txt(wt_wifi_is_associated()));
 	shell_print(sh, "  Wi-Fi IPv4 bound: %s", wt_onoff_txt(wt_wifi_has_ipv4()));
+	shell_print(sh, "  Wi-Fi UDP command server: %s on port %u",
+		    wt_onoff_txt(wt_wifi_cmd_is_enabled()), wt_wifi_cmd_port());
 	shell_print(sh, "  Stored Wi-Fi credentials:");
 	(void)wt_wifi_credentials_print_list(sh);
 	shell_print(sh, "  BLE requested: %s", wt_onoff_txt(wt_ble_is_requested()));
@@ -59,7 +61,7 @@ static int shell_cmd_wt_wifi(const struct shell *sh, size_t argc, char **argv)
 	int ret = 0;
 
 	if (argc < 2) {
-		shell_print(sh, "usage: wt wifi on|off|status|reconnect|cred");
+		shell_print(sh, "usage: wt wifi on|off|status|reconnect|cmd|cred");
 		return -EINVAL;
 	}
 
@@ -74,10 +76,24 @@ static int shell_cmd_wt_wifi(const struct shell *sh, size_t argc, char **argv)
 		if (!wt_wifi_is_requested()) {
 			ret = wt_wifi_service_set(true);
 		}
+	} else if (!strcmp(argv[1], "cmd") || !strcmp(argv[1], "command") || !strcmp(argv[1], "commands")) {
+		if (argc < 3 || !strcmp(argv[2], "status")) {
+			shell_print(sh, "Wi-Fi UDP command server: %s on port %u",
+				    wt_onoff_txt(wt_wifi_cmd_is_enabled()), wt_wifi_cmd_port());
+			return 0;
+		}
+		if (!strcmp(argv[2], "on") || !strcmp(argv[2], "start")) {
+			ret = wt_wifi_cmd_service_set(true);
+		} else if (!strcmp(argv[2], "off") || !strcmp(argv[2], "stop")) {
+			ret = wt_wifi_cmd_service_set(false);
+		} else {
+			shell_print(sh, "usage: wt wifi cmd on|off|status");
+			return -EINVAL;
+		}
 	} else if (!strcmp(argv[1], "cred") || !strcmp(argv[1], "creds")) {
 		return wt_wifi_credentials_shell(sh, argc, argv);
 	} else {
-		shell_print(sh, "usage: wt wifi on|off|status|reconnect|cred");
+		shell_print(sh, "usage: wt wifi on|off|status|reconnect|cmd|cred");
 		return -EINVAL;
 	}
 
@@ -212,7 +228,7 @@ static int shell_cmd_wt_tx(const struct shell *sh, size_t argc, char **argv)
 SHELL_STATIC_SUBCMD_SET_CREATE(wt_subcmds,
 	SHELL_CMD_ARG(status, NULL, "Show WT02E40E radio state", shell_cmd_wt_status, 1, 0),
 	SHELL_CMD_ARG(mode, NULL, "Set radio mode: idle, ble, wifi, both", shell_cmd_wt_mode, 2, 0),
-	SHELL_CMD_ARG(wifi, NULL, "Control Wi-Fi: on, off, status, reconnect, cred", shell_cmd_wt_wifi, 2, WT_TX_PAYLOAD_MAX),
+	SHELL_CMD_ARG(wifi, NULL, "Control Wi-Fi: on, off, status, reconnect, cmd, cred", shell_cmd_wt_wifi, 2, WT_TX_PAYLOAD_MAX),
 	SHELL_CMD_ARG(ble, NULL, "Control BLE: on, off, status", shell_cmd_wt_ble, 2, 0),
 	SHELL_CMD_ARG(tx, NULL, "Transmit: ble <msg>, wifi <ip> <port> <msg>, both <ip> <port> <msg>", shell_cmd_wt_tx, 3, WT_TX_PAYLOAD_MAX),
 	SHELL_SUBCMD_SET_END);
