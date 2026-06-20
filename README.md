@@ -17,7 +17,7 @@ There's an additional BLE_Webapp you can use for quick testing if the programmin
 
 - [What this firmware does](#what-this-firmware-does)
 - [Hardware assumptions](#hardware-assumptions)
-- [Debug/programming hookup used during bring-up](#debugprogramming-hookup-used-during-bring-up)
+- [Debug/programming hookup used during bring-up (via nRF53DK)](#debugprogramming-hookup-used-during-bring-up)
 - [LEDs](#leds)
 - [UART shell pins](#uart-shell-pins)
 - [Build and flash](#build-and-flash)
@@ -128,7 +128,7 @@ nrf5340dk/nrf5340/cpuapp
 
 That target does not expose the onboard nRF7002 devicetree node, so `CONFIG_WIFI_NRF70` will be forced off.
 
-## Debug/programming hookup used during bring-up
+## Debug/programming hookup used during bring-up (via nRF53DK)
 
 The working debug hookup was:
 
