@@ -493,7 +493,7 @@
           <li><code>ble on</code>, <code>ble off</code>, <code>ble status</code>. From BLE, <code>ble off</code> responds first and then disconnects.</li>
           <li><code>ble name</code>, <code>ble name set &lt;name&gt;</code>, or top-level <code>name set &lt;name&gt;</code>, changes the advertised BLE name at runtime.</li>
           <li><code>wifi on</code>, <code>wifi off</code>, <code>wifi status</code>, <code>wifi reconnect</code>.</li>
-          <li><code>wifi scan</code>, <code>wifi scan json</code>, <code>wifi scan start</code>, <code>wifi scan last [json]</code>, scans nearby APs.</li>
+          <li><code>wifi scan</code>, <code>wifi scan json</code>, <code>wifi scan start</code>, <code>wifi scan last [json]</code>, and <code>wifi scan item &lt;n&gt; json</code>, scans nearby APs with sub-250-byte BLE responses.</li>
           <li><code>wifi scan connect &lt;index&gt; &lt;password&gt; [wpa2|auto|wpa3]</code> and <code>wifi scan open &lt;index&gt;</code>, use a scan result to configure credentials.</li>
           <li><code>wifi cmd on</code>, <code>wifi cmd off</code>, <code>wifi cmd status</code>, and <code>wifi cmd port [port]</code>, controls and live-rebinds the UDP command listener.</li>
           <li><code>discovery on</code>, <code>discovery off</code>, <code>discovery status</code>, controls UDP discovery beacons to port 5000.</li>
@@ -543,7 +543,7 @@
   <script>
     "use strict";
 
-    const WEBAPP_VERSION = "2026-06-20-parserfix2-v15";
+    const WEBAPP_VERSION = "2026-06-22-wifi-scan-led-safe-v17";
 
     const UUIDS = {
       service: "7f1c0001-2b5a-4f2d-9a31-d6a5f4e040e1",
@@ -590,7 +590,8 @@
       { group: "Wi-Fi", name: "Wi-Fi reconnect", cmd: "wifi reconnect", desc: "Restart Wi-Fi connection attempt." },
       { group: "Wi-Fi", name: "Scan networks", cmd: "wifi scan", desc: "Scan nearby Wi-Fi networks and return a compact text list." },
       { group: "Wi-Fi", name: "Scan networks JSON", cmd: "wifi scan json", desc: "Scan nearby Wi-Fi networks and return structured JSON for the webapp." },
-      { group: "Wi-Fi", name: "Last scan JSON", cmd: "wifi scan last json", desc: "Read the last scan result without starting a new scan." },
+      { group: "Wi-Fi", name: "Last scan JSON", cmd: "wifi scan last json", desc: "Read the last scan summary without starting a new scan." },
+      { group: "Wi-Fi", name: "Scan item JSON", cmd: "wifi scan item 1 json", desc: "Read one scan result in a sub-250-byte JSON response." },
       { group: "Wi-Fi", name: "Connect scan result", cmd: "wifi scan connect 1 YOUR_PASSWORD wpa2", desc: "Use scan result #1 with the password helper, then start Wi-Fi." },
       { group: "Wi-Fi", name: "Wi-Fi command status", cmd: "wifi cmd status", desc: "Check the UDP command listener state/port." },
       { group: "Wi-Fi", name: "Wi-Fi command on", cmd: "wifi cmd on", desc: "Enable UDP command receive on the board." },
@@ -673,7 +674,10 @@
       events: null,
       scanResults: [],
       pendingJsonResponse: "",
-      pendingJsonAt: 0
+      pendingJsonAt: 0,
+      scanPollTimer: null,
+      scanItemTimer: null,
+      commandBusy: false
     };
 
     const encoder = new TextEncoder();
@@ -755,6 +759,13 @@
       const parsedDirect = tryParseJsonResponse(text);
 
       if (state.pendingJsonResponse) {
+        if (parsedDirect && parsedDirect !== undefined) {
+          state.pendingJsonResponse = "";
+          log(`RESP   <= ${text}`, "resp");
+          handleMaybeScanJson(text);
+          return;
+        }
+
         state.pendingJsonResponse += text;
         const parsedPending = tryParseJsonResponse(state.pendingJsonResponse);
         if (parsedPending && parsedPending !== undefined) {
@@ -764,7 +775,7 @@
           handleMaybeScanJson(full);
           return;
         }
-        if (state.pendingJsonResponse.length > 1800 || now - state.pendingJsonAt > 5000) {
+        if (state.pendingJsonResponse.length > 5000 || now - state.pendingJsonAt > 20000) {
           log(`RESP   <= ${state.pendingJsonResponse}`, "resp");
           state.pendingJsonResponse = "";
         }
@@ -909,17 +920,18 @@
       el.statusSubBtn.disabled = !connected || !state.chars.status;
       el.responseSubBtn.disabled = !connected || !state.chars.commandResponse;
       el.txSubBtn.disabled = !connected || !state.chars.txNotify;
-      el.sendCommandBtn.disabled = !connected || !state.chars.commandWrite;
-      el.setCredBtn.disabled = !connected || !state.chars.commandWrite;
-      el.makeWifiTxBtn.disabled = !connected || !state.chars.commandWrite;
-      el.setBoardCmdPortBtn.disabled = !connected || !state.chars.commandWrite;
-      el.scanWifiBleBtn.disabled = !connected || !state.chars.commandWrite;
-      el.scanLastBtn.disabled = !connected || !state.chars.commandWrite;
-      el.connectScannedSsidBtn.disabled = !connected || !state.chars.commandWrite;
-      el.sendTemplateBtn.disabled = !connected || !state.chars.commandWrite;
+      const commandDisabled = !connected || !state.chars.commandWrite || state.commandBusy;
+      el.sendCommandBtn.disabled = commandDisabled;
+      el.setCredBtn.disabled = commandDisabled;
+      el.makeWifiTxBtn.disabled = commandDisabled;
+      el.setBoardCmdPortBtn.disabled = commandDisabled;
+      el.scanWifiBleBtn.disabled = commandDisabled;
+      el.scanLastBtn.disabled = commandDisabled;
+      el.connectScannedSsidBtn.disabled = commandDisabled;
+      el.sendTemplateBtn.disabled = commandDisabled;
 
       for (const btn of el.quickCmds) {
-        btn.disabled = !connected || !state.chars.commandWrite;
+        btn.disabled = commandDisabled;
       }
 
       for (const btn of el.commonTemplateButtons.querySelectorAll("button")) {
@@ -1155,33 +1167,46 @@
         return;
       }
 
-      for (const line of lines) {
-        if (lineNeedsTxNotify(line) && state.chars.txNotify && !state.txNotifications) {
-          log("Enabling BLE TX notifications before tx ble/tx both", "info");
-          await toggleTxNotifications(true);
-          await sleep(80);
-        }
+      if (state.commandBusy) {
+        log("Command path busy, ignoring duplicate click", "warn");
+        return;
+      }
 
-        const payload = encoder.encode(line);
+      state.commandBusy = true;
+      setConnectedUi(Boolean(state.server?.connected));
 
-        log(`CMD    => ${line}`, "cmd");
-
-        try {
-          if (state.chars.commandWrite.properties.write) {
-            await state.chars.commandWrite.writeValueWithResponse(payload);
-          } else if (state.chars.commandWrite.properties.writeWithoutResponse) {
-            await state.chars.commandWrite.writeValueWithoutResponse(payload);
-          } else {
-            await state.chars.commandWrite.writeValue(payload);
+      try {
+        for (const line of lines) {
+          if (lineNeedsTxNotify(line) && state.chars.txNotify && !state.txNotifications) {
+            log("Enabling BLE TX notifications before tx ble/tx both", "info");
+            await toggleTxNotifications(true);
+            await sleep(80);
           }
 
-          setTimeout(readCommandResponse, 180);
+          const payload = encoder.encode(line);
 
-          await sleep(120);
-        } catch (err) {
-          log(`CMDERR <= ${line}: ${err.message}`, "error");
-          break;
+          log(`CMD    => ${line}`, "cmd");
+
+          try {
+            if (state.chars.commandWrite.properties.write) {
+              await state.chars.commandWrite.writeValueWithResponse(payload);
+            } else if (state.chars.commandWrite.properties.writeWithoutResponse) {
+              await state.chars.commandWrite.writeValueWithoutResponse(payload);
+            } else {
+              await state.chars.commandWrite.writeValue(payload);
+            }
+
+            setTimeout(readCommandResponse, 180);
+
+            await sleep(120);
+          } catch (err) {
+            log(`CMDERR <= ${line}: ${err.message}`, "error");
+            break;
+          }
         }
+      } finally {
+        state.commandBusy = false;
+        setConnectedUi(Boolean(state.server?.connected));
       }
     }
 
@@ -1264,6 +1289,9 @@
             if (parsed && parsed.type === "wifi_scan") {
               updateScanResults(parsed.results || []);
               log(`SCAN <= ${msg.address} ${parsed.count || 0} network(s)`, "wifi");
+            } else if (parsed && parsed.type === "wifi_scan_item") {
+              mergeScanItem(parsed);
+              log(`SCANAP <= ${msg.address} ${parsed.i}: ${parsed.ssid} ${parsed.rssi} dBm`, "wifi");
             } else if (parsed && parsed.type === "wt02e40e_discovery") {
               if (el.boardIpInput && msg.address) {
                 el.boardIpInput.value = msg.address;
@@ -1355,6 +1383,7 @@
 
     function updateScanResults(results) {
       state.scanResults = Array.isArray(results) ? results : [];
+      state.scanResults.sort((a, b) => Number(a.i || 0) - Number(b.i || 0));
       el.scanSsidSelect.innerHTML = "";
 
       if (!state.scanResults.length) {
@@ -1375,6 +1404,31 @@
       }
     }
 
+    function mergeScanItem(item) {
+      if (!item || item.error || !item.i) {
+        return;
+      }
+
+      const next = state.scanResults.filter(existing => Number(existing.i) !== Number(item.i));
+      next.push(item);
+      updateScanResults(next);
+    }
+
+    function scheduleScanItemFetch(count) {
+      const itemCount = Math.min(Math.max(Number(count) || 0, 0), 10);
+      if (!itemCount) {
+        return;
+      }
+
+      const commands = [];
+      for (let i = 1; i <= itemCount; i++) {
+        commands.push(`wifi scan item ${i} json`);
+      }
+
+      clearTimeout(state.scanItemTimer);
+      state.scanItemTimer = setTimeout(() => writeCommand(commands.join("\n")), 250);
+    }
+
     function handleMaybeScanJson(text) {
       const cleaned = stripRequestId(text);
       if (!cleaned.startsWith("{")) {
@@ -1386,6 +1440,17 @@
         if (parsed && parsed.type === "wifi_scan") {
           updateScanResults(parsed.results || []);
           log(`SCAN   <= ${parsed.count || 0} network(s), running=${parsed.running}`, "wifi");
+          if (parsed.running) {
+            clearTimeout(state.scanPollTimer);
+            state.scanPollTimer = setTimeout(() => writeCommand("wifi scan last json"), 1200);
+          } else {
+            scheduleScanItemFetch(parsed.count || 0);
+          }
+        } else if (parsed && parsed.type === "wifi_scan_item") {
+          mergeScanItem(parsed);
+          if (!parsed.error) {
+            log(`SCANAP <= ${parsed.i}: ${parsed.ssid} ${parsed.rssi} dBm`, "wifi");
+          }
         }
       } catch (_) {
         // Not all responses are JSON. Ignore.

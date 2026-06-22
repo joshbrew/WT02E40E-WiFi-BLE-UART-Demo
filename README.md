@@ -2,7 +2,7 @@
 
 This project is a bring-up and command bridge application for a WT02E40E module, which combines an nRF5340 host MCU with an nRF7002 Wi-Fi companion.
 
-This was compiled successfully with the nRF Connect Toolchain ver v3.3.1 in VSCode. The BLE, UART, and WiFi search are working, still testing the rest.
+This was compiled successfully with the nRF Connect Toolchain ver v3.3.1 in VSCode.
 
 The app starts in BLE-only mode by default, exposes a UART/RTT shell, exposes a matching BLE command interface, and can turn Wi-Fi on later when the antenna and credentials are ready. It is based on Nordic's Wi-Fi station sample, but the application code has been split into smaller modules so the behavior is easier to trace.
 
@@ -17,7 +17,7 @@ There's an additional BLE_Webapp you can use for quick testing if the programmin
 
 - [What this firmware does](#what-this-firmware-does)
 - [Hardware assumptions](#hardware-assumptions)
-- [Debug/programming hookup used during bring-up (via nRF53DK)](#debugprogramming-hookup-used-during-bring-up)
+- [Debug/programming hookup used during bring-up](#debugprogramming-hookup-used-during-bring-up)
 - [LEDs](#leds)
 - [UART shell pins](#uart-shell-pins)
 - [Build and flash](#build-and-flash)
@@ -42,6 +42,7 @@ There's an additional BLE_Webapp you can use for quick testing if the programmin
 - [BLE command execution note](#ble-command-execution-note)
 - [TX command quoting note](#tx-command-quoting-note)
 - [BLE TX write-path fix](#ble-tx-write-path-fix)
+- [Parser fix note](#parser-fix-note)
 - [Full command list summary](#full-command-list-summary)
   - [Status, identity, and config](#status-identity-and-config)
   - [Boot behavior](#boot-behavior)
@@ -127,7 +128,7 @@ nrf5340dk/nrf5340/cpuapp
 
 That target does not expose the onboard nRF7002 devicetree node, so `CONFIG_WIFI_NRF70` will be forced off.
 
-## Debug/programming hookup used during bring-up (via nRF53DK)
+## Debug/programming hookup used during bring-up
 
 The working debug hookup was:
 
@@ -859,10 +860,11 @@ This build can scan nearby Wi-Fi access points from UART, BLE, or the Wi-Fi UDP 
 
 ```text
 wifi scan                         # start scan, wait, return compact text
-wifi scan json                    # start scan, wait, return JSON
+wifi scan json                    # start scan, wait, return sub-250-byte JSON summary
 wifi scan start                   # start scan asynchronously
 wifi scan last                    # read previous scan as text
-wifi scan last json               # read previous scan as JSON
+wifi scan last json               # read previous scan summary as JSON
+wifi scan item <index> json       # read one AP from the cached scan as JSON
 wifi scan status                  # running/valid/count state
 wifi scan clear                   # clear cached scan results
 wifi scan connect <index> <password> [wpa2|auto|wpa3]
@@ -898,6 +900,20 @@ tx wifi 192.168.1.50 5000 "hello over UDP"
 
 The firmware joins remaining TX arguments into a payload, but quoting is still the safest form when sending through Web Bluetooth or copying commands between BLE, UART, and Wi-Fi.
 
+
+## BLE TX write-path fix
+
+Firmware version `0.3.3-ble-tx-writefix` debounces BLE command writes for a few milliseconds before dispatching. This keeps Web Bluetooth long/offset writes from executing a partial command like `tx ble` before the payload fragment arrives.
+
+
+## Parser fix note
+
+Firmware `0.3.4-parserfix` fixes the quoted-argument tokenizer so multi-word commands over BLE and Wi-Fi UDP parse correctly. This specifically fixes commands like:
+
+```text
+tx ble "hello from the web console"
+wifi cred set "My Home WiFi" "password with spaces" wpa2
+```
 
 ## Full command list summary
 
@@ -1041,7 +1057,7 @@ wifi scan connect <index> <password> [wpa2|auto|wpa3]
 wifi scan open <index>
 ```
 
-`wifi scan json` starts a scan and returns structured results. `wifi scan last` reports the last stored result list without starting a new scan. `wifi scan connect` uses an index from the last scan result list to set credentials.
+`wifi scan json` starts a scan and returns a compact summary. Use `wifi scan item <index> json` to fetch each AP as its own sub-250-byte response. `wifi scan last` reports the last stored scan summary without starting a new scan. `wifi scan connect` uses an index from the last scan result list to set credentials.
 
 ### Wi-Fi UDP command receive
 

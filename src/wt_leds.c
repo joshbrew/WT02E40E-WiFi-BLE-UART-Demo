@@ -1,4 +1,6 @@
 #include <errno.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
@@ -48,27 +50,34 @@ static void indicator_leds_thread(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
 
-	int heartbeat = 0;
+	uint32_t tick = 0;
 
 	configure_indicator_led(&led_boot, "blue/boot");
 	configure_indicator_led(&led_wifi, "green/wifi");
 
 	while (1) {
+		const bool heartbeat = (tick & 1U) != 0U;
+		const bool wifi_fast_blink = (tick & 1U) != 0U;
+		const bool wifi_slow_blink = ((tick / 4U) & 1U) != 0U;
+		int wifi_led_on = 0;
+
 		if (wt_ble_is_connected()) {
 			set_indicator_led(&led_boot, 1);
 		} else {
 			set_indicator_led(&led_boot, heartbeat);
 		}
 
-		if (wt_wifi_has_ipv4()) {
-			set_indicator_led(&led_wifi, 1);
-		} else if (wt_wifi_is_associated()) {
-			set_indicator_led(&led_wifi, heartbeat);
-		} else {
-			set_indicator_led(&led_wifi, 0);
+		if (wt_wifi_scan_is_running()) {
+			wifi_led_on = wifi_fast_blink;
+		} else if (wt_wifi_has_ipv4()) {
+			wifi_led_on = 1;
+		} else if (wt_wifi_is_requested() || wt_wifi_is_associated()) {
+			wifi_led_on = wifi_slow_blink;
 		}
 
-		heartbeat = !heartbeat;
+		set_indicator_led(&led_wifi, wifi_led_on);
+
+		tick++;
 		k_msleep(LED_SLEEP_TIME_MS);
 	}
 }

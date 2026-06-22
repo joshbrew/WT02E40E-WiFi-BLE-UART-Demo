@@ -307,10 +307,11 @@ This build can scan nearby Wi-Fi access points from UART, BLE, or the Wi-Fi UDP 
 
 ```text
 wifi scan                         # start scan, wait, return compact text
-wifi scan json                    # start scan, wait, return JSON
+wifi scan json                    # start scan, wait, return sub-250-byte JSON summary
 wifi scan start                   # start scan asynchronously
 wifi scan last                    # read previous scan as text
-wifi scan last json               # read previous scan as JSON
+wifi scan last json               # read previous scan summary as JSON
+wifi scan item <index> json       # read one AP from the cached scan as JSON
 wifi scan status                  # running/valid/count state
 wifi scan clear                   # clear cached scan results
 wifi scan connect <index> <password> [wpa2|auto|wpa3]

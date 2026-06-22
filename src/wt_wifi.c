@@ -213,6 +213,21 @@ int wt_wifi_scan_count(void)
 	return wifi_scan_result_count;
 }
 
+static void wt_wifi_scan_enable_support_services(void)
+{
+	if (!wt_wifi_is_requested()) {
+		(void)wt_wifi_service_set(true);
+	}
+
+	if (!wt_wifi_cmd_is_enabled()) {
+		(void)wt_wifi_cmd_service_set(true);
+	}
+
+	if (!wt_wifi_discovery_is_enabled()) {
+		(void)wt_wifi_discovery_service_set(true);
+	}
+}
+
 static const char *wifi_scan_band_label(uint8_t band)
 {
 	return wifi_band_txt((enum wifi_frequency_bands)band);
@@ -295,6 +310,7 @@ static void wt_wifi_scan_clear_locked(void)
 	wifi_scan_last_status = 0;
 	wifi_scan_valid = false;
 	wifi_scan_finished_ms = 0;
+	wifi_scan_started_ms = 0;
 }
 
 static int wt_wifi_scan_find_by_ssid(const char *ssid)
@@ -335,7 +351,7 @@ static void wt_wifi_scan_store_result(const struct wifi_scan_result *entry)
 	memcpy(ssid, entry->ssid, ssid_len);
 	ssid[ssid_len] = '\0';
 
-	if (k_mutex_lock(&wifi_scan_lock, K_NO_WAIT) != 0) {
+	if (k_mutex_lock(&wifi_scan_lock, K_MSEC(20)) != 0) {
 		return;
 	}
 
@@ -377,16 +393,19 @@ static void wt_wifi_scan_store_result(const struct wifi_scan_result *entry)
 
 static int wt_wifi_scan_start(void)
 {
-	struct net_if *iface = net_if_get_first_wifi();
+	struct net_if *iface;
 	struct wifi_scan_params params = { 0 };
 	int ret;
 
-	if (!iface) {
-		return -ENODEV;
-	}
-
 	if (wifi_scan_running) {
 		return -EALREADY;
+	}
+
+	wt_wifi_scan_enable_support_services();
+
+	iface = net_if_get_first_wifi();
+	if (!iface) {
+		return -ENODEV;
 	}
 
 	ret = wifi_prepare_once();
@@ -397,6 +416,7 @@ static int wt_wifi_scan_start(void)
 	k_mutex_lock(&wifi_scan_lock, K_FOREVER);
 	wt_wifi_scan_clear_locked();
 	wifi_scan_running = true;
+	wifi_scan_last_status = -EINPROGRESS;
 	wifi_scan_started_ms = k_uptime_get();
 	k_sem_reset(&wifi_scan_done_sem);
 	k_mutex_unlock(&wifi_scan_lock);
@@ -420,70 +440,120 @@ static int wt_wifi_scan_start(void)
 	return 0;
 }
 
-int wt_wifi_scan_format_results(char *buf, size_t size, bool json)
+static int wt_wifi_scan_format_len(char *buf, size_t size, int len)
 {
-	char bssid[sizeof("xx:xx:xx:xx:xx:xx")];
+	if (!buf || size == 0) {
+		return -EINVAL;
+	}
+	if (len < 0) {
+		buf[0] = '\0';
+		return len;
+	}
+	if ((size_t)len >= size) {
+		buf[size - 1] = '\0';
+		return size - 1;
+	}
+	return len;
+}
+
+static int wt_wifi_scan_format_summary(char *buf, size_t size, bool json)
+{
 	int64_t age_s = 0;
-	size_t off = 0;
+	bool running;
+	bool valid;
+	int count;
+	int status;
+	int len;
 
 	if (!buf || size == 0) {
 		return -EINVAL;
 	}
 
 	k_mutex_lock(&wifi_scan_lock, K_FOREVER);
-
 	if (wifi_scan_finished_ms > 0) {
 		age_s = (k_uptime_get() - wifi_scan_finished_ms) / 1000;
 	}
+	running = wifi_scan_running;
+	valid = wifi_scan_valid;
+	count = wifi_scan_result_count;
+	status = wifi_scan_last_status;
+	k_mutex_unlock(&wifi_scan_lock);
 
 	if (json) {
-		off = wt_wifi_appendf(buf, size, off,
-			"{\"type\":\"wifi_scan\",\"running\":%s,\"valid\":%s,\"count\":%d,\"last_status\":%d,\"age_s\":%lld,\"results\":[",
-			wifi_scan_running ? "true" : "false",
-			wifi_scan_valid ? "true" : "false",
-			wifi_scan_result_count, wifi_scan_last_status, (long long)age_s);
-
-		for (int i = 0; i < wifi_scan_result_count && off + 1 < size; i++) {
-			char esc_ssid[(WIFI_SSID_MAX_LEN * 2) + 1];
-			const struct wt_wifi_scan_entry *entry = &wifi_scan_results[i];
-
-			bssid[0] = '\0';
-			if (entry->mac_len) {
-				net_sprint_ll_addr_buf(entry->mac, WIFI_MAC_ADDR_LEN,
-						       (uint8_t *)bssid, sizeof(bssid));
-			}
-			wt_wifi_json_escape(esc_ssid, sizeof(esc_ssid), entry->ssid);
-
-			off = wt_wifi_appendf(buf, size, off,
-				"%s{\"i\":%d,\"ssid\":\"%s\",\"rssi\":%d,\"channel\":%u,\"band\":\"%s\",\"security\":\"%s\",\"mfp\":\"%s\",\"bssid\":\"%s\"}",
-				i ? "," : "", i + 1, esc_ssid, entry->rssi, entry->channel,
-				wifi_scan_band_label(entry->band), wifi_scan_security_label(entry->security),
-				wifi_mfp_txt(entry->mfp), bssid);
-		}
-
-		off = wt_wifi_appendf(buf, size, off, "]}");
+		len = snprintk(buf, size,
+			"{\"type\":\"wifi_scan\",\"running\":%s,\"valid\":%s,\"count\":%d,\"status\":%d,\"age_s\":%lld,\"results\":[]}",
+			running ? "true" : "false",
+			valid ? "true" : "false",
+			count, status, (long long)age_s);
 	} else {
-		off = wt_wifi_appendf(buf, size, off, "ok wifi scan running=%s valid=%s count=%d status=%d age=%llds",
-			wifi_scan_running ? "on" : "off", wifi_scan_valid ? "yes" : "no",
-			wifi_scan_result_count, wifi_scan_last_status, (long long)age_s);
-
-		for (int i = 0; i < wifi_scan_result_count && off + 1 < size; i++) {
-			const struct wt_wifi_scan_entry *entry = &wifi_scan_results[i];
-			bssid[0] = '\0';
-			if (entry->mac_len) {
-				net_sprint_ll_addr_buf(entry->mac, WIFI_MAC_ADDR_LEN,
-						       (uint8_t *)bssid, sizeof(bssid));
-			}
-			off = wt_wifi_appendf(buf, size, off,
-				" | %d:\"%s\" rssi=%d ch=%u band=%s sec=%s bssid=%s",
-				i + 1, entry->ssid, entry->rssi, entry->channel,
-				wifi_scan_band_label(entry->band), wifi_scan_security_label(entry->security),
-				bssid[0] ? bssid : "?");
-		}
+		len = snprintk(buf, size,
+			"ok wifi scan running=%s valid=%s count=%d status=%d age=%llds; use wifi scan item <n> [json]",
+			running ? "on" : "off", valid ? "yes" : "no",
+			count, status, (long long)age_s);
 	}
 
+	return wt_wifi_scan_format_len(buf, size, len);
+}
+
+static int wt_wifi_scan_format_item(int index, char *buf, size_t size, bool json)
+{
+	struct wt_wifi_scan_entry entry;
+	char bssid[sizeof("xx:xx:xx:xx:xx:xx")];
+	char esc_ssid[(WIFI_SSID_MAX_LEN * 2) + 1];
+	bool found = false;
+	int len;
+
+	if (!buf || size == 0) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&wifi_scan_lock, K_FOREVER);
+	if (index >= 1 && index <= wifi_scan_result_count && wifi_scan_results[index - 1].used) {
+		entry = wifi_scan_results[index - 1];
+		found = true;
+	}
 	k_mutex_unlock(&wifi_scan_lock);
-	return off;
+
+	if (!found) {
+		if (json) {
+			len = snprintk(buf, size,
+				"{\"type\":\"wifi_scan_item\",\"i\":%d,\"error\":%d}",
+				index, -ENOENT);
+		} else {
+			len = snprintk(buf, size, "err wifi scan item %d", -ENOENT);
+		}
+		return wt_wifi_scan_format_len(buf, size, len);
+	}
+
+	bssid[0] = '\0';
+	if (entry.mac_len) {
+		net_sprint_ll_addr_buf(entry.mac, WIFI_MAC_ADDR_LEN,
+				       (uint8_t *)bssid, sizeof(bssid));
+	}
+	if (bssid[0] == '\0') {
+		snprintk(bssid, sizeof(bssid), "?");
+	}
+
+	wt_wifi_json_escape(esc_ssid, sizeof(esc_ssid), entry.ssid);
+
+	if (json) {
+		len = snprintk(buf, size,
+			"{\"type\":\"wifi_scan_item\",\"i\":%d,\"ssid\":\"%s\",\"rssi\":%d,\"channel\":%u,\"band\":\"%s\",\"security\":\"%s\",\"bssid\":\"%s\"}",
+			index, esc_ssid, entry.rssi, entry.channel,
+			wifi_scan_band_label(entry.band), wifi_scan_security_label(entry.security), bssid);
+	} else {
+		len = snprintk(buf, size,
+			"ok wifi scan item %d ssid=\"%s\" rssi=%d ch=%u band=%s sec=%s bssid=%s",
+			index, entry.ssid, entry.rssi, entry.channel,
+			wifi_scan_band_label(entry.band), wifi_scan_security_label(entry.security), bssid);
+	}
+
+	return wt_wifi_scan_format_len(buf, size, len);
+}
+
+int wt_wifi_scan_format_results(char *buf, size_t size, bool json)
+{
+	return wt_wifi_scan_format_summary(buf, size, json);
 }
 
 static int wt_wifi_scan_get_ssid(int index, char *ssid, size_t ssid_size,
@@ -566,6 +636,20 @@ int wt_wifi_scan_command(char **argv, size_t argc, char *rsp, size_t rsp_len)
 		return wt_wifi_scan_format_results(rsp, rsp_len, json);
 	}
 
+	if (!strcmp(argv[2], "item") || !strcmp(argv[2], "ap")) {
+		int index;
+		char *end;
+		if (argc < 4) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "usage wifi scan item <index> [json]");
+		}
+		index = strtol(argv[3], &end, 10);
+		if (*end != '\0') {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err wifi scan index");
+		}
+		json = argc >= 5 && !strcmp(argv[4], "json");
+		return wt_wifi_scan_format_item(index, rsp, rsp_len, json);
+	}
+
 	if (!strcmp(argv[2], "status")) {
 		return wt_wifi_cmd_rsp(rsp, rsp_len, "ok wifi scan running=%s valid=%s count=%d last_status=%d",
 				      wifi_scan_running ? "on" : "off", wifi_scan_valid ? "yes" : "no",
@@ -634,7 +718,7 @@ int wt_wifi_scan_command(char **argv, size_t argc, char *rsp, size_t rsp_len)
 	}
 
 	return wt_wifi_cmd_rsp(rsp, rsp_len,
-			      "usage wifi scan [json|start|wait [json]|last [json]|status|clear|connect <index> <password> [security]|open <index>]");
+			      "usage wifi scan [json|start|wait [json]|last [json]|item <index> [json]|status|clear|connect <index> <password> [security]|open <index>]");
 }
 
 static const char *wifi_security_name(enum wifi_security_type security)
@@ -1368,6 +1452,11 @@ static int wifi_worker_loop(void)
 #endif
 
 		if (!wifi_requested || wifi_context.connected) {
+			k_sleep(K_MSEC(250));
+			continue;
+		}
+
+		if (wifi_scan_running) {
 			k_sleep(K_MSEC(250));
 			continue;
 		}
@@ -2135,7 +2224,7 @@ K_THREAD_DEFINE(wifi_cmd_thread_id, WT_WIFI_CMD_THREAD_STACK_SIZE,
 static void wifi_discovery_thread(void *p1, void *p2, void *p3)
 {
 	struct sockaddr_in dst = { 0 };
-	char payload[WT_WIFI_CMD_RSP_TEXT_MAX];
+	char payload[WT_WIFI_DISCOVERY_PAYLOAD_MAX];
 	int sock;
 	int yes = 1;
 

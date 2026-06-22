@@ -40,6 +40,7 @@ static bool ble_cmd_rsp_notify_enabled;
 static char ble_status_buf[WT_BLE_STATUS_TEXT_MAX];
 static char ble_cmd_buf[WT_BLE_CMD_TEXT_MAX];
 static char ble_cmd_rsp_buf[WT_BLE_CMD_RSP_TEXT_MAX];
+static char ble_cmd_rsp_format_buf[WT_BLE_CMD_RSP_TEXT_MAX];
 static char ble_current_req_id[24];
 static char ble_name[WT_BLE_NAME_MAX + 1] = CONFIG_BT_DEVICE_NAME;
 static struct k_work_delayable ble_status_ping_work;
@@ -276,6 +277,27 @@ static size_t wt_ble_notify_payload_max(void)
 	return MIN((size_t)(mtu - 3), (size_t)WT_BLE_NOTIFY_APP_PAYLOAD_MAX);
 }
 
+static int wt_ble_notify_one_chunk(const struct bt_gatt_attr *attr,
+					    const uint8_t *data, size_t len)
+{
+	int ret = 0;
+
+	for (int attempt = 0; attempt <= WT_BLE_NOTIFY_RETRY_COUNT; attempt++) {
+		ret = bt_gatt_notify(ble_conn, attr, data, len);
+		if (!ret) {
+			return 0;
+		}
+
+		if (ret != -EBUSY && ret != -ENOMEM && ret != -EAGAIN) {
+			return ret;
+		}
+
+		k_msleep(WT_BLE_NOTIFY_RETRY_DELAY_MS);
+	}
+
+	return ret;
+}
+
 static int wt_ble_notify_chunked(const struct bt_gatt_attr *attr,
 					 const uint8_t *data, size_t len)
 {
@@ -299,11 +321,11 @@ static int wt_ble_notify_chunked(const struct bt_gatt_attr *attr,
 	while (offset < len) {
 		size_t chunk_len = MIN(len - offset, chunk_max);
 
-		ret = bt_gatt_notify(ble_conn, attr, &data[offset], chunk_len);
+		ret = wt_ble_notify_one_chunk(attr, &data[offset], chunk_len);
 		if (ret == -EMSGSIZE && chunk_max > 20) {
 			chunk_max = 20;
 			chunk_len = MIN(len - offset, chunk_max);
-			ret = bt_gatt_notify(ble_conn, attr, &data[offset], chunk_len);
+			ret = wt_ble_notify_one_chunk(attr, &data[offset], chunk_len);
 		}
 
 		if (ret) {
@@ -311,6 +333,9 @@ static int wt_ble_notify_chunked(const struct bt_gatt_attr *attr,
 		}
 
 		offset += chunk_len;
+		if (offset < len) {
+			k_msleep(WT_BLE_NOTIFY_INTER_CHUNK_DELAY_MS);
+		}
 	}
 
 	return 0;
@@ -319,12 +344,11 @@ static int wt_ble_notify_chunked(const struct bt_gatt_attr *attr,
 static int wt_ble_rsp_send(const char *fmt, ...)
 {
 	va_list args;
-	char temp[WT_BLE_CMD_RSP_TEXT_MAX];
 	int len;
 	int notify_ret = 0;
 
 	va_start(args, fmt);
-	len = vsnprintk(temp, sizeof(temp), fmt, args);
+	len = vsnprintk(ble_cmd_rsp_format_buf, sizeof(ble_cmd_rsp_format_buf), fmt, args);
 	va_end(args);
 
 	if (len < 0) {
@@ -332,11 +356,16 @@ static int wt_ble_rsp_send(const char *fmt, ...)
 		return len;
 	}
 
-	if (ble_current_req_id[0] != '\0' && temp[0] != '#') {
+	if ((size_t)len >= sizeof(ble_cmd_rsp_format_buf)) {
+		ble_cmd_rsp_format_buf[sizeof(ble_cmd_rsp_format_buf) - 1] = '\0';
+		len = sizeof(ble_cmd_rsp_format_buf) - 1;
+	}
+
+	if (ble_current_req_id[0] != '\0' && ble_cmd_rsp_format_buf[0] != '#') {
 		len = snprintk(ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf),
-			       "#%s %s", ble_current_req_id, temp);
+		       "#%s %s", ble_current_req_id, ble_cmd_rsp_format_buf);
 	} else {
-		strncpy(ble_cmd_rsp_buf, temp, sizeof(ble_cmd_rsp_buf) - 1);
+		strncpy(ble_cmd_rsp_buf, ble_cmd_rsp_format_buf, sizeof(ble_cmd_rsp_buf) - 1);
 		ble_cmd_rsp_buf[sizeof(ble_cmd_rsp_buf) - 1] = '\0';
 		len = strlen(ble_cmd_rsp_buf);
 	}

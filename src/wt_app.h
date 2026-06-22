@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WT_APP_FW_VERSION "0.3.5-parserfix2"
+#define WT_APP_FW_VERSION "0.3.6-scanled-safe"
 
 int wt_app_settings_init(void);
 int wt_app_config_save(void);
