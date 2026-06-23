@@ -36,7 +36,9 @@ LOG_MODULE_REGISTER(wt_wifi, CONFIG_LOG_DEFAULT_LEVEL);
 #include "wt_app.h"
 #include "wt_common.h"
 #include "wt_config.h"
+#include "wt_leds.h"
 #include "wt_radio.h"
+#include "wt_stream.h"
 #include "wt_wifi.h"
 
 #define WIFI_NODE DT_CHOSEN(zephyr_wifi)
@@ -56,7 +58,7 @@ static bool wifi_ready_status;
 
 static volatile bool wifi_requested;
 static bool wifi_prepared;
-static volatile bool wifi_cmd_enabled = true;
+static volatile bool wifi_cmd_enabled;
 static volatile uint16_t wifi_cmd_port_current = WT_WIFI_CMD_UDP_PORT;
 static volatile bool wifi_discovery_enabled;
 
@@ -236,31 +238,6 @@ static const char *wifi_scan_band_label(uint8_t band)
 static const char *wifi_scan_security_label(enum wifi_security_type security)
 {
 	return wifi_security_txt(security);
-}
-
-static size_t wt_wifi_appendf(char *buf, size_t size, size_t off, const char *fmt, ...)
-{
-	va_list args;
-	int ret;
-
-	if (!buf || size == 0 || off >= size) {
-		return off;
-	}
-
-	va_start(args, fmt);
-	ret = vsnprintk(&buf[off], size - off, fmt, args);
-	va_end(args);
-
-	if (ret < 0) {
-		buf[off] = '\0';
-		return off;
-	}
-
-	if ((size_t)ret >= size - off) {
-		return size - 1;
-	}
-
-	return off + ret;
 }
 
 static size_t wt_wifi_json_escape(char *dst, size_t dst_len, const char *src)
@@ -556,6 +533,66 @@ int wt_wifi_scan_format_results(char *buf, size_t size, bool json)
 	return wt_wifi_scan_format_summary(buf, size, json);
 }
 
+int wt_wifi_scan_stream_json(wt_wifi_stream_emit_fn emit, void *user)
+{
+	char piece[WT_WIFI_CMD_RSP_TEXT_MAX];
+	int64_t age_s = 0;
+	bool running;
+	bool valid;
+	int count;
+	int status;
+	int len;
+	int ret;
+
+	if (!emit) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&wifi_scan_lock, K_FOREVER);
+	if (wifi_scan_finished_ms > 0) {
+		age_s = (k_uptime_get() - wifi_scan_finished_ms) / 1000;
+	}
+	running = wifi_scan_running;
+	valid = wifi_scan_valid;
+	count = wifi_scan_result_count;
+	status = wifi_scan_last_status;
+	k_mutex_unlock(&wifi_scan_lock);
+
+	len = snprintk(piece, sizeof(piece),
+		"{\"type\":\"wifi_scan\",\"running\":%s,\"valid\":%s,\"count\":%d,\"status\":%d,\"age_s\":%lld,\"results\":[",
+		running ? "true" : "false",
+		valid ? "true" : "false",
+		count, status, (long long)age_s);
+	if (len < 0) {
+		return len;
+	}
+	ret = emit(piece, strlen(piece), user);
+	if (ret) {
+		return ret;
+	}
+
+	for (int i = 1; i <= count && i <= WT_WIFI_SCAN_MAX_RESULTS; i++) {
+		if (i > 1) {
+			ret = emit(",", 1, user);
+			if (ret) {
+				return ret;
+			}
+		}
+
+		len = wt_wifi_scan_format_item(i, piece, sizeof(piece), true);
+		if (len < 0) {
+			return len;
+		}
+
+		ret = emit(piece, strlen(piece), user);
+		if (ret) {
+			return ret;
+		}
+	}
+
+	return emit("]}", 2, user);
+}
+
 static int wt_wifi_scan_get_ssid(int index, char *ssid, size_t ssid_size,
 				 enum wifi_security_type *security)
 {
@@ -610,6 +647,17 @@ int wt_wifi_scan_command(char **argv, size_t argc, char *rsp, size_t rsp_len)
 			return wt_wifi_scan_format_results(rsp, rsp_len, true);
 		}
 		return wt_wifi_scan_format_results(rsp, rsp_len, true);
+	}
+
+	if (!strcmp(argv[2], "full") || !strcmp(argv[2], "stream")) {
+		ret = wt_wifi_scan_start();
+		if (ret && ret != -EALREADY) {
+			return wt_wifi_cmd_rsp(rsp, rsp_len, "err wifi scan start %d", ret);
+		}
+		(void)k_sem_take(&wifi_scan_done_sem, K_MSEC(WT_WIFI_SCAN_TIMEOUT_MS));
+		return wt_wifi_cmd_rsp(rsp, rsp_len,
+				      "ok wifi scan full stream use BLE response notify or Wi-Fi UDP command; count=%d",
+				      wifi_scan_result_count);
 	}
 
 	if (!strcmp(argv[2], "start") || !strcmp(argv[2], "now")) {
@@ -718,7 +766,7 @@ int wt_wifi_scan_command(char **argv, size_t argc, char *rsp, size_t rsp_len)
 	}
 
 	return wt_wifi_cmd_rsp(rsp, rsp_len,
-			      "usage wifi scan [json|start|wait [json]|last [json]|item <index> [json]|status|clear|connect <index> <password> [security]|open <index>]");
+			      "usage wifi scan [json|full json|start|wait [json]|last [json]|item <index> [json]|status|clear|connect <index> <password> [security]|open <index>]");
 }
 
 static const char *wifi_security_name(enum wifi_security_type security)
@@ -1159,11 +1207,13 @@ static void handle_wifi_connect_result(struct net_mgmt_event_callback *cb)
 
 	if (status->status) {
 		LOG_ERR("Connection failed (%d)", status->status);
+		wt_leds_error_activity();
 		wifi_context.connected = false;
 		wifi_context.ipv4_bound = false;
 	snprintk(wifi_ipv4_text, sizeof(wifi_ipv4_text), "0.0.0.0");
 	} else {
 		LOG_INF("Connected");
+		wt_leds_wifi_activity();
 		wifi_context.connected = true;
 		wifi_context.ipv4_bound = false;
 	snprintk(wifi_ipv4_text, sizeof(wifi_ipv4_text), "0.0.0.0");
@@ -1216,6 +1266,11 @@ static void wifi_scan_event_handler(struct net_mgmt_event_callback *cb,
 		wt_wifi_scan_sort_locked();
 		k_mutex_unlock(&wifi_scan_lock);
 		LOG_INF("Wi-Fi scan done: status=%d count=%d", wifi_scan_last_status, wifi_scan_result_count);
+			if (wifi_scan_last_status) {
+				wt_leds_error_activity();
+			} else {
+				wt_leds_wifi_activity();
+			}
 		k_sem_give(&wifi_scan_done_sem);
 		break;
 	}
@@ -1255,6 +1310,7 @@ static void print_dhcp_ip(struct net_mgmt_event_callback *cb)
 
 	wifi_context.ipv4_bound = true;
 	LOG_INF("DHCP IP address: %s", wifi_ipv4_text);
+	wt_leds_wifi_activity();
 }
 
 static void net_mgmt_event_handler(struct net_mgmt_event_callback *cb,
@@ -1890,7 +1946,7 @@ int wt_wifi_command_execute(const char *line, char *rsp, size_t rsp_len)
 
 	if (!strcmp(argv[0], "help") || !strcmp(argv[0], "?")) {
 		return wt_wifi_cmd_rsp(rsp, rsp_len,
-					  "cmds: id, version, fw, config, boot, status [json], mode [delay], wifi scan/cmd/cred, ble, discovery, bridge, ping, tx, reboot");
+					  "cmds: id, version, fw, config, boot, status [json], mode [delay], wifi scan/cmd/cred, ble, discovery, bridge, led, ping, tx, reboot");
 	}
 
 	if (!strcmp(argv[0], "id")) {
@@ -1921,6 +1977,10 @@ int wt_wifi_command_execute(const char *line, char *rsp, size_t rsp_len)
 
 	if (!strcmp(argv[0], "bridge")) {
 		return wt_app_bridge_command(argv, argc, rsp, rsp_len);
+	}
+
+	if (!strcmp(argv[0], "led") || !strcmp(argv[0], "indicator") || !strcmp(argv[0], "ind")) {
+		return wt_app_led_command(argv, argc, rsp, rsp_len);
 	}
 
 	if (!strcmp(argv[0], "ping")) {
@@ -2135,6 +2195,161 @@ static int wifi_cmd_socket_open(uint16_t port)
 	return sock;
 }
 
+
+struct wt_wifi_udp_stream_ctx {
+	int sock;
+	const struct sockaddr *peer;
+	socklen_t peer_len;
+	struct wt_stream_ctx stream;
+	char frame[WT_WIFI_CMD_RSP_TEXT_MAX];
+};
+
+static uint16_t wifi_cmd_stream_next_id;
+static uint16_t wifi_tx_stream_next_id;
+
+static bool wt_wifi_cmd_is_full_scan_request(const char *line)
+{
+	char line_buf[WT_WIFI_CMD_RX_TEXT_MAX];
+	char *argv_storage[16];
+	char **argv = argv_storage;
+	int argc;
+
+	if (!line || line[0] == '\0') {
+		return false;
+	}
+
+	strncpy(line_buf, line, sizeof(line_buf) - 1);
+	line_buf[sizeof(line_buf) - 1] = '\0';
+
+	argc = wt_split_args_quoted(line_buf, argv_storage, ARRAY_SIZE(argv_storage));
+	if (argc <= 0) {
+		return false;
+	}
+
+	if (argv[0][0] == '#') {
+		argv++;
+		argc--;
+		if (argc <= 0) {
+			return false;
+		}
+	}
+
+	if (!strcmp(argv[0], "wt")) {
+		argv++;
+		argc--;
+		if (argc <= 0) {
+			return false;
+		}
+	}
+
+	return argc >= 3 &&
+	       !strcmp(argv[0], "wifi") &&
+	       (!strcmp(argv[1], "scan") || !strcmp(argv[1], "apscan") || !strcmp(argv[1], "networks")) &&
+	       (!strcmp(argv[2], "full") || !strcmp(argv[2], "stream"));
+}
+
+static int wt_wifi_udp_stream_send_frame(const char *frame, size_t len, void *user)
+{
+	struct wt_wifi_udp_stream_ctx *ctx = (struct wt_wifi_udp_stream_ctx *)user;
+	int ret;
+
+	if (!ctx || !frame) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(ctx->sock, frame, len, 0, ctx->peer, ctx->peer_len);
+	wt_leds_wifi_activity();
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return ret == (int)len ? 0 : -EIO;
+}
+
+static int wt_wifi_udp_stream_begin(struct wt_wifi_udp_stream_ctx *ctx, uint16_t id)
+{
+	if (!ctx) {
+		return -EINVAL;
+	}
+
+	return wt_stream_begin(&ctx->stream, ctx->frame, sizeof(ctx->frame),
+			       sizeof(ctx->frame) - 1, 2,
+			       wt_wifi_udp_stream_send_frame, ctx, id);
+}
+
+static int wt_wifi_udp_stream_emit_payload(const char *data, size_t len, void *user)
+{
+	struct wt_wifi_udp_stream_ctx *ctx = (struct wt_wifi_udp_stream_ctx *)user;
+
+	if (!ctx) {
+		return -EINVAL;
+	}
+
+	return wt_stream_write(&ctx->stream, data, len);
+}
+
+static int wt_wifi_udp_stream_write_request_prefix(struct wt_wifi_udp_stream_ctx *ctx,
+						   const char *line)
+{
+	char request_id[24];
+	size_t off = 0;
+	const char *p = line;
+
+	while (p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) {
+		p++;
+	}
+
+	if (!p || *p != '#') {
+		return 0;
+	}
+
+	p++;
+	while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' &&
+	       off + 1 < sizeof(request_id)) {
+		request_id[off++] = *p++;
+	}
+	request_id[off] = '\0';
+
+	return wt_stream_write_request_id_prefix(&ctx->stream, request_id);
+}
+
+static int wt_wifi_cmd_send_scan_stream(int sock, struct sockaddr_in *peer,
+					       socklen_t peer_len, const char *cmd,
+					       char *rsp, size_t rsp_len)
+{
+	struct wt_wifi_udp_stream_ctx ctx = {
+		.sock = sock,
+		.peer = (const struct sockaddr *)peer,
+		.peer_len = peer_len,
+	};
+	char *scan_argv[] = { "wifi", "scan", "json" };
+	int ret;
+
+	ret = wt_wifi_scan_command(scan_argv, ARRAY_SIZE(scan_argv), rsp, rsp_len);
+	if (ret < 0) {
+		wt_wifi_cmd_prefix_request_id(cmd, rsp, rsp_len);
+		return zsock_sendto(sock, rsp, strlen(rsp), 0,
+				       (struct sockaddr *)peer, peer_len);
+	}
+
+	ret = wt_wifi_udp_stream_begin(&ctx, wt_stream_next_id(&wifi_cmd_stream_next_id));
+	if (ret) {
+		return ret;
+	}
+
+	ret = wt_wifi_udp_stream_write_request_prefix(&ctx, cmd);
+	if (ret) {
+		return ret;
+	}
+
+	ret = wt_wifi_scan_stream_json(wt_wifi_udp_stream_emit_payload, &ctx);
+	if (ret) {
+		return ret;
+	}
+
+	return wt_stream_end(&ctx.stream);
+}
+
 static void wifi_cmd_thread(void *p1, void *p2, void *p3)
 {
 	struct sockaddr_in peer;
@@ -2197,6 +2412,7 @@ static void wifi_cmd_thread(void *p1, void *p2, void *p3)
 
 		cmd_buf[ret] = '\0';
 		wt_wifi_cmd_trim(cmd_buf);
+		wt_leds_wifi_activity();
 
 		if (!wifi_cmd_enabled) {
 			(void)wt_wifi_cmd_rsp(rsp_buf, sizeof(rsp_buf), "err wifi cmd off");
@@ -2206,6 +2422,15 @@ static void wifi_cmd_thread(void *p1, void *p2, void *p3)
 					      wt_onoff_txt(wt_wifi_is_requested()), wt_onoff_txt(wt_wifi_has_ipv4()));
 		} else {
 			LOG_INF("Wi-Fi UDP command on port %u: %s", bound_port, cmd_buf);
+			if (wt_wifi_cmd_is_full_scan_request(cmd_buf)) {
+				ret = wt_wifi_cmd_send_scan_stream(sock, &peer, peer_len,
+								 cmd_buf, rsp_buf, sizeof(rsp_buf));
+				if (ret < 0) {
+					LOG_WRN("Wi-Fi UDP stream response failed: %d", ret);
+				}
+				continue;
+			}
+
 			ret = wt_wifi_command_execute(cmd_buf, rsp_buf, sizeof(rsp_buf));
 			if (ret < 0) {
 				LOG_WRN("Wi-Fi UDP command failed: %d", ret);
@@ -2215,6 +2440,7 @@ static void wifi_cmd_thread(void *p1, void *p2, void *p3)
 		wt_wifi_cmd_prefix_request_id(cmd_buf, rsp_buf, sizeof(rsp_buf));
 		(void)zsock_sendto(sock, rsp_buf, strlen(rsp_buf), 0,
 					  (struct sockaddr *)&peer, peer_len);
+		wt_leds_wifi_activity();
 	}
 }
 
@@ -2256,6 +2482,7 @@ static void wifi_discovery_thread(void *p1, void *p2, void *p3)
 			if (len > 0) {
 				(void)zsock_sendto(sock, payload, strlen(payload), 0,
 						  (struct sockaddr *)&dst, sizeof(dst));
+					wt_leds_bridge_activity();
 			}
 		}
 
@@ -2266,13 +2493,15 @@ static void wifi_discovery_thread(void *p1, void *p2, void *p3)
 K_THREAD_DEFINE(wifi_discovery_thread_id, 2048,
 		wifi_discovery_thread, NULL, NULL, NULL, WT_WIFI_CMD_THREAD_PRIORITY, 0, 0);
 
-int wt_wifi_udp_transmit_payload(const char *ip_text, const char *port_text,
-					const uint8_t *data, size_t len)
+static int wt_wifi_udp_transmit_prepare(const char *ip_text, const char *port_text,
+						 struct sockaddr_in *dst)
 {
-	struct sockaddr_in dst = { 0 };
 	uint16_t port;
-	int sock;
 	int ret;
+
+	if (!ip_text || !port_text || !dst) {
+		return -EINVAL;
+	}
 
 	if (!wifi_context.ipv4_bound) {
 		return -ENOTCONN;
@@ -2283,28 +2512,94 @@ int wt_wifi_udp_transmit_payload(const char *ip_text, const char *port_text,
 		return ret;
 	}
 
+	memset(dst, 0, sizeof(*dst));
+	dst->sin_family = AF_INET;
+	dst->sin_port = htons(port);
+
+	ret = zsock_inet_pton(AF_INET, ip_text, &dst->sin_addr);
+	if (ret != 1) {
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+int wt_wifi_udp_transmit_stream_payload(const char *ip_text, const char *port_text,
+					       const uint8_t *data, size_t len)
+{
+	struct sockaddr_in dst;
+	struct wt_wifi_udp_stream_ctx ctx;
+	int sock;
+	int ret;
+
+	if (!data && len > 0) {
+		return -EINVAL;
+	}
+
+	ret = wt_wifi_udp_transmit_prepare(ip_text, port_text, &dst);
+	if (ret) {
+		return ret;
+	}
+
 	sock = zsock_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock < 0) {
 		return -errno;
 	}
 
-	dst.sin_family = AF_INET;
-	dst.sin_port = htons(port);
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.sock = sock;
+	ctx.peer = (const struct sockaddr *)&dst;
+	ctx.peer_len = sizeof(dst);
 
-	ret = zsock_inet_pton(AF_INET, ip_text, &dst.sin_addr);
-	if (ret != 1) {
-		zsock_close(sock);
+	ret = wt_wifi_udp_stream_begin(&ctx, wt_stream_next_id(&wifi_tx_stream_next_id));
+	if (!ret) {
+		ret = wt_stream_write(&ctx.stream, (const char *)data, len);
+	}
+	if (!ret) {
+		ret = wt_stream_end(&ctx.stream);
+	}
+
+	zsock_close(sock);
+	return ret;
+}
+
+int wt_wifi_udp_transmit_payload(const char *ip_text, const char *port_text,
+						const uint8_t *data, size_t len)
+{
+	struct sockaddr_in dst;
+	int sock;
+	int ret;
+
+	if (!data && len > 0) {
 		return -EINVAL;
 	}
 
+	if (len > WT_TX_PAYLOAD_MAX) {
+		return wt_wifi_udp_transmit_stream_payload(ip_text, port_text, data, len);
+	}
+
+	ret = wt_wifi_udp_transmit_prepare(ip_text, port_text, &dst);
+	if (ret) {
+		return ret;
+	}
+
+	sock = zsock_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (sock < 0) {
+		return -errno;
+	}
+
 	ret = zsock_sendto(sock, data, len, 0, (struct sockaddr *)&dst, sizeof(dst));
+	if (ret >= 0) {
+		wt_leds_wifi_activity();
+		wt_leds_bridge_activity();
+	}
 	zsock_close(sock);
 
 	if (ret < 0) {
 		return -errno;
 	}
 
-	return ret == len ? 0 : -EIO;
+	return ret == (int)len ? 0 : -EIO;
 }
 
 int wt_wifi_init(void)

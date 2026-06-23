@@ -8,6 +8,8 @@
 
 #include <zephyr/shell/shell.h>
 
+typedef int (*wt_wifi_stream_emit_fn)(const char *data, size_t len, void *user);
+
 bool wt_wifi_is_requested(void);
 bool wt_wifi_is_associated(void);
 bool wt_wifi_has_ipv4(void);
@@ -27,6 +29,8 @@ int wt_wifi_credentials_shell(const struct shell *sh, size_t argc, char **argv);
 int wt_wifi_reconnect_if_requested(void);
 int wt_wifi_udp_transmit_payload(const char *ip_text, const char *port_text,
 					const uint8_t *data, size_t len);
+int wt_wifi_udp_transmit_stream_payload(const char *ip_text, const char *port_text,
+					       const uint8_t *data, size_t len);
 int wt_wifi_cmd_service_set(bool enable);
 bool wt_wifi_cmd_is_enabled(void);
 uint16_t wt_wifi_cmd_port(void);
@@ -36,6 +40,7 @@ bool wt_wifi_discovery_is_enabled(void);
 int wt_wifi_command_execute(const char *line, char *rsp, size_t rsp_len);
 int wt_wifi_scan_command(char **argv, size_t argc, char *rsp, size_t rsp_len);
 int wt_wifi_scan_format_results(char *buf, size_t size, bool json);
+int wt_wifi_scan_stream_json(wt_wifi_stream_emit_fn emit, void *user);
 bool wt_wifi_scan_is_running(void);
 int wt_wifi_scan_count(void);
 

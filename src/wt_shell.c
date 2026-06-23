@@ -191,6 +191,19 @@ static int shell_cmd_wt_bridge(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
+static int shell_cmd_wt_led(const struct shell *sh, size_t argc, char **argv)
+{
+	int ret = wt_app_led_command(argv, argc, shell_rsp_buf, sizeof(shell_rsp_buf));
+
+	if (ret < 0) {
+		shell_error(sh, "%s", shell_rsp_buf);
+		return ret;
+	}
+
+	shell_print(sh, "%s", shell_rsp_buf);
+	return 0;
+}
+
 static int shell_cmd_wt_ping(const struct shell *sh, size_t argc, char **argv)
 {
 	int ret = wt_app_ping_execute(argv, argc, shell_rsp_buf, sizeof(shell_rsp_buf));
@@ -558,6 +571,8 @@ SHELL_STATIC_SUBCMD_SET_CREATE(wt_subcmds,
 	SHELL_CMD_ARG(config, NULL, "Show config, config json, config save, config reset", shell_cmd_wt_config, 1, 1),
 	SHELL_CMD_ARG(boot, NULL, "Boot config: status, mode <idle|ble|wifi|both>", shell_cmd_wt_boot, 1, 2),
 	SHELL_CMD_ARG(bridge, NULL, "Bridge rules and send", shell_cmd_wt_bridge, 1, WT_TX_PAYLOAD_MAX),
+	SHELL_CMD_ARG(led, NULL, "LED indicators: status, test, pulse", shell_cmd_wt_led, 1, 2),
+	SHELL_CMD_ARG(indicator, NULL, "LED indicators: status, test, pulse", shell_cmd_wt_led, 1, 2),
 	SHELL_CMD_ARG(ping, NULL, "Ping local|uart|ble|wifi <ip> <port>", shell_cmd_wt_ping, 1, 3),
 	SHELL_CMD_ARG(name, NULL, "Get/set BLE advertised name", shell_cmd_wt_name, 1, WT_BLE_NAME_MAX),
 	SHELL_CMD_ARG(mode, NULL, "Set radio mode: idle, ble, wifi, both [delay]", shell_cmd_wt_mode, 2, 1),

@@ -24,7 +24,9 @@ LOG_MODULE_REGISTER(wt_ble, CONFIG_LOG_DEFAULT_LEVEL);
 #include "wt_app.h"
 #include "wt_common.h"
 #include "wt_config.h"
+#include "wt_leds.h"
 #include "wt_radio.h"
+#include "wt_stream.h"
 #include "wt_wifi.h"
 
 #if defined(CONFIG_BT)
@@ -49,6 +51,30 @@ static struct k_work_delayable ble_self_stop_work;
 static struct k_work_delayable ble_cmd_work;
 static char ble_cmd_work_buf[WT_BLE_CMD_TEXT_MAX];
 static atomic_t ble_cmd_work_busy;
+
+#define WT_BLE_OUTQ_DEPTH 8
+
+struct wt_ble_outq_item {
+	uint16_t len;
+	uint8_t data[WT_BLE_NOTIFY_APP_PAYLOAD_MAX];
+};
+
+struct wt_ble_outq {
+	struct k_mutex lock;
+	struct k_work_delayable work;
+	const struct bt_gatt_attr *attr;
+	volatile bool *enabled;
+	const char *name;
+	uint8_t head;
+	uint8_t tail;
+	uint8_t count;
+	uint16_t dropped;
+	struct wt_ble_outq_item item[WT_BLE_OUTQ_DEPTH];
+};
+
+static struct wt_ble_outq ble_rsp_outq;
+static struct wt_ble_outq ble_tx_outq;
+static K_MUTEX_DEFINE(ble_notify_lock);
 
 #define WT_BT_UUID_SERVICE_VAL \
 	BT_UUID_128_ENCODE(0x7f1c0001, 0x2b5a, 0x4f2d, 0x9a31, 0xd6a5f4e040e1)
@@ -80,6 +106,15 @@ static int wt_ble_schedule_self_stop_response(const char *rsp);
 static size_t wt_ble_notify_payload_max(void);
 static int wt_ble_notify_chunked(const struct bt_gatt_attr *attr,
 					 const uint8_t *data, size_t len);
+static int wt_ble_rsp_stream_text(const char *text, size_t len);
+static int wt_ble_rsp_stream_write_payload(const char *data, size_t len, void *user);
+static int wt_ble_rsp_stream_wifi_scan_json(void);
+static int wt_ble_tx_stream_payload(const uint8_t *data, size_t len);
+static void wt_ble_rsp_outq_work_handler(struct k_work *work);
+static void wt_ble_tx_outq_work_handler(struct k_work *work);
+static int wt_ble_outq_push(struct wt_ble_outq *q, const uint8_t *data, size_t len);
+static void wt_ble_outq_clear(struct wt_ble_outq *q);
+static void wt_ble_outq_flush(struct wt_ble_outq *q);
 
 bool wt_ble_is_requested(void)
 {
@@ -282,19 +317,24 @@ static int wt_ble_notify_one_chunk(const struct bt_gatt_attr *attr,
 {
 	int ret = 0;
 
+	k_mutex_lock(&ble_notify_lock, K_FOREVER);
+
 	for (int attempt = 0; attempt <= WT_BLE_NOTIFY_RETRY_COUNT; attempt++) {
 		ret = bt_gatt_notify(ble_conn, attr, data, len);
 		if (!ret) {
+			k_mutex_unlock(&ble_notify_lock);
 			return 0;
 		}
 
 		if (ret != -EBUSY && ret != -ENOMEM && ret != -EAGAIN) {
+			k_mutex_unlock(&ble_notify_lock);
 			return ret;
 		}
 
 		k_msleep(WT_BLE_NOTIFY_RETRY_DELAY_MS);
 	}
 
+	k_mutex_unlock(&ble_notify_lock);
 	return ret;
 }
 
@@ -341,6 +381,263 @@ static int wt_ble_notify_chunked(const struct bt_gatt_attr *attr,
 	return 0;
 }
 
+
+static void wt_ble_outq_init(struct wt_ble_outq *q, const char *name,
+				     const struct bt_gatt_attr *attr,
+				     volatile bool *enabled,
+				     k_work_handler_t handler)
+{
+	memset(q, 0, sizeof(*q));
+	q->name = name;
+	q->attr = attr;
+	q->enabled = enabled;
+	k_mutex_init(&q->lock);
+	k_work_init_delayable(&q->work, handler);
+}
+
+static bool wt_ble_outq_ready(struct wt_ble_outq *q)
+{
+	return ble_ready && ble_conn && ble_connected_state && q && q->enabled && *q->enabled;
+}
+
+static int wt_ble_outq_push(struct wt_ble_outq *q, const uint8_t *data, size_t len)
+{
+	struct wt_ble_outq_item *item;
+	int ret = -ENOSPC;
+
+	if (!q || (!data && len > 0)) {
+		return -EINVAL;
+	}
+
+	if (!ble_ready) {
+		return -ENODEV;
+	}
+
+	if (!ble_conn || !ble_connected_state) {
+		return -ENOTCONN;
+	}
+
+	if (!q->enabled || !*q->enabled) {
+		return -EACCES;
+	}
+
+	if (len > wt_ble_notify_payload_max() || len > WT_BLE_NOTIFY_APP_PAYLOAD_MAX) {
+		return -EMSGSIZE;
+	}
+
+	for (int attempt = 0; attempt < 2; attempt++) {
+		k_mutex_lock(&q->lock, K_FOREVER);
+
+		if (q->count < WT_BLE_OUTQ_DEPTH) {
+			item = &q->item[q->tail];
+			item->len = (uint16_t)len;
+			if (len > 0) {
+				memcpy(item->data, data, len);
+			}
+			q->tail = (q->tail + 1) % WT_BLE_OUTQ_DEPTH;
+			q->count++;
+			ret = 0;
+		}
+
+		k_mutex_unlock(&q->lock);
+
+		if (!ret) {
+			k_work_schedule(&q->work, K_NO_WAIT);
+			return 0;
+		}
+
+		wt_ble_outq_flush(q);
+	}
+
+	k_mutex_lock(&q->lock, K_FOREVER);
+	q->dropped++;
+	k_mutex_unlock(&q->lock);
+	return -ENOSPC;
+}
+
+static bool wt_ble_outq_pop(struct wt_ble_outq *q, struct wt_ble_outq_item *dst)
+{
+	bool ok = false;
+
+	k_mutex_lock(&q->lock, K_FOREVER);
+
+	if (q->count > 0) {
+		*dst = q->item[q->head];
+		q->head = (q->head + 1) % WT_BLE_OUTQ_DEPTH;
+		q->count--;
+		ok = true;
+	}
+
+	k_mutex_unlock(&q->lock);
+	return ok;
+}
+
+static void wt_ble_outq_requeue_front(struct wt_ble_outq *q,
+					      const struct wt_ble_outq_item *item)
+{
+	if (!q || !item) {
+		return;
+	}
+
+	k_mutex_lock(&q->lock, K_FOREVER);
+
+	if (q->count < WT_BLE_OUTQ_DEPTH) {
+		q->head = (q->head + WT_BLE_OUTQ_DEPTH - 1) % WT_BLE_OUTQ_DEPTH;
+		q->item[q->head] = *item;
+		q->count++;
+	} else {
+		q->dropped++;
+	}
+
+	k_mutex_unlock(&q->lock);
+}
+
+static void wt_ble_outq_clear(struct wt_ble_outq *q)
+{
+	if (!q) {
+		return;
+	}
+
+	k_mutex_lock(&q->lock, K_FOREVER);
+	q->head = 0;
+	q->tail = 0;
+	q->count = 0;
+	k_mutex_unlock(&q->lock);
+}
+
+static void wt_ble_outq_flush(struct wt_ble_outq *q)
+{
+	struct wt_ble_outq_item item;
+	int ret;
+
+	while (wt_ble_outq_ready(q) && wt_ble_outq_pop(q, &item)) {
+		ret = wt_ble_notify_one_chunk(q->attr, item.data, item.len);
+		if (ret) {
+			LOG_WRN("BLE %s notify queue send failed: %d", q->name, ret);
+			if (ret == -EBUSY || ret == -ENOMEM || ret == -EAGAIN) {
+				wt_ble_outq_requeue_front(q, &item);
+				k_work_schedule(&q->work, K_MSEC(WT_BLE_NOTIFY_RETRY_DELAY_MS));
+				return;
+			}
+			continue;
+		}
+
+		wt_leds_ble_report_activity();
+		k_msleep(WT_BLE_NOTIFY_INTER_CHUNK_DELAY_MS);
+	}
+}
+
+static void wt_ble_rsp_outq_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	wt_ble_outq_flush(&ble_rsp_outq);
+}
+
+static void wt_ble_tx_outq_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	wt_ble_outq_flush(&ble_tx_outq);
+}
+
+static uint16_t ble_rsp_stream_next_id;
+static uint16_t ble_tx_stream_next_id;
+
+static int wt_ble_rsp_stream_notify_frame(const char *frame, size_t len, void *user)
+{
+	ARG_UNUSED(user);
+	return wt_ble_outq_push(&ble_rsp_outq, (const uint8_t *)frame, len);
+}
+
+static int wt_ble_tx_stream_notify_frame(const char *frame, size_t len, void *user)
+{
+	ARG_UNUSED(user);
+	return wt_ble_outq_push(&ble_tx_outq, (const uint8_t *)frame, len);
+}
+
+static int wt_ble_rsp_stream_begin(struct wt_stream_ctx *ctx)
+{
+	return wt_stream_begin(ctx, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf),
+				       wt_ble_notify_payload_max(),
+				       WT_BLE_NOTIFY_INTER_CHUNK_DELAY_MS,
+				       wt_ble_rsp_stream_notify_frame, NULL,
+				       wt_stream_next_id(&ble_rsp_stream_next_id));
+}
+
+static int wt_ble_rsp_stream_write_payload(const char *data, size_t len, void *user)
+{
+	return wt_stream_write((struct wt_stream_ctx *)user, data, len);
+}
+
+static int wt_ble_rsp_stream_text(const char *text, size_t len)
+{
+	struct wt_stream_ctx ctx;
+	int ret;
+
+	ret = wt_ble_rsp_stream_begin(&ctx);
+	if (ret) {
+		return ret;
+	}
+
+	if (ble_current_req_id[0] != '\0' && text && text[0] != '#') {
+		ret = wt_stream_write_request_id_prefix(&ctx, ble_current_req_id);
+		if (ret) {
+			return ret;
+		}
+	}
+
+	ret = wt_stream_write(&ctx, text, len);
+	if (ret) {
+		return ret;
+	}
+
+	return wt_stream_end(&ctx);
+}
+
+static int wt_ble_rsp_stream_wifi_scan_json(void)
+{
+	struct wt_stream_ctx ctx;
+	int ret;
+
+	ret = wt_ble_rsp_stream_begin(&ctx);
+	if (ret) {
+		return ret;
+	}
+
+	ret = wt_stream_write_request_id_prefix(&ctx, ble_current_req_id);
+	if (ret) {
+		return ret;
+	}
+
+	ret = wt_wifi_scan_stream_json(wt_ble_rsp_stream_write_payload, &ctx);
+	if (ret) {
+		return ret;
+	}
+
+	return wt_stream_end(&ctx);
+}
+
+static int wt_ble_tx_stream_payload(const uint8_t *data, size_t len)
+{
+	struct wt_stream_ctx ctx;
+	int ret;
+
+	ret = wt_stream_begin(&ctx, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf),
+			      wt_ble_notify_payload_max(),
+			      WT_BLE_NOTIFY_INTER_CHUNK_DELAY_MS,
+			      wt_ble_tx_stream_notify_frame, NULL,
+			      wt_stream_next_id(&ble_tx_stream_next_id));
+	if (ret) {
+		return ret;
+	}
+
+	ret = wt_stream_write(&ctx, (const char *)data, len);
+	if (ret) {
+		return ret;
+	}
+
+	return wt_stream_end(&ctx);
+}
+
 static int wt_ble_rsp_send(const char *fmt, ...)
 {
 	va_list args;
@@ -382,11 +679,16 @@ static int wt_ble_rsp_send(const char *fmt, ...)
 	LOG_INF("BLE command response: %s", ble_cmd_rsp_buf);
 
 	if (ble_conn && ble_connected_state && ble_cmd_rsp_notify_enabled) {
-		notify_ret = wt_ble_notify_chunked(&wt_ble_tx_svc.attrs[10],
-						     (const uint8_t *)ble_cmd_rsp_buf,
-						     (size_t)len);
+		if ((size_t)len <= wt_ble_notify_payload_max()) {
+			notify_ret = wt_ble_outq_push(&ble_rsp_outq,
+							  (const uint8_t *)ble_cmd_rsp_buf,
+							  (size_t)len);
+		} else {
+			notify_ret = wt_ble_rsp_stream_text(ble_cmd_rsp_format_buf,
+							 strlen(ble_cmd_rsp_format_buf));
+		}
 		if (notify_ret) {
-			LOG_WRN("BLE command response notify failed: %d", notify_ret);
+			LOG_WRN("BLE command response notify queue failed: %d", notify_ret);
 			return notify_ret;
 		}
 	}
@@ -776,6 +1078,25 @@ static int wt_ble_command_wifi(char **argv, size_t argc)
 	}
 
 	if (!strcmp(argv[1], "scan") || !strcmp(argv[1], "apscan") || !strcmp(argv[1], "networks")) {
+		if (argc >= 3 && (!strcmp(argv[2], "full") || !strcmp(argv[2], "stream"))) {
+			char *scan_argv[] = { "wifi", "scan", "json" };
+
+			ret = wt_wifi_scan_command(scan_argv, ARRAY_SIZE(scan_argv),
+						   ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+			if (ret < 0) {
+				return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+			}
+
+			ret = wt_ble_rsp_stream_wifi_scan_json();
+			if (ret == -EACCES) {
+				return wt_ble_rsp_send("err stream response notify off");
+			}
+			if (ret) {
+				return wt_ble_rsp_send("err stream %d", ret);
+			}
+			return 0;
+		}
+
 		ret = wt_wifi_scan_command(argv, argc, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
 		if (ret < 0) {
 			return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
@@ -900,6 +1221,11 @@ static int wt_ble_command_execute(const char *line)
 
 	if (!strcmp(argv[0], "bridge")) {
 		ret = wt_app_bridge_command(argv, argc, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
+		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
+	}
+
+	if (!strcmp(argv[0], "led") || !strcmp(argv[0], "indicator") || !strcmp(argv[0], "ind")) {
+		ret = wt_app_led_command(argv, argc, ble_cmd_rsp_buf, sizeof(ble_cmd_rsp_buf));
 		return wt_ble_rsp_send("%s", ble_cmd_rsp_buf);
 	}
 
@@ -1215,6 +1541,8 @@ static void ble_disconnected(struct bt_conn *conn, uint8_t reason)
 	ble_status_notify_enabled = false;
 	ble_cmd_rsp_notify_enabled = false;
 	wt_ble_status_reschedule();
+	wt_ble_outq_clear(&ble_rsp_outq);
+	wt_ble_outq_clear(&ble_tx_outq);
 
 	if (ble_conn) {
 		bt_conn_unref(ble_conn);
@@ -1236,6 +1564,10 @@ void wt_ble_init(void)
 	k_work_init_delayable(&ble_adv_restart_work, wt_ble_adv_restart_work_handler);
 	k_work_init_delayable(&ble_self_stop_work, wt_ble_self_stop_work_handler);
 	k_work_init_delayable(&ble_cmd_work, wt_ble_cmd_work_handler);
+	wt_ble_outq_init(&ble_rsp_outq, "rsp", &wt_ble_tx_svc.attrs[10],
+			 &ble_cmd_rsp_notify_enabled, wt_ble_rsp_outq_work_handler);
+	wt_ble_outq_init(&ble_tx_outq, "tx", &wt_ble_tx_svc.attrs[2],
+			 &ble_tx_notify_enabled, wt_ble_tx_outq_work_handler);
 	atomic_clear(&ble_cmd_work_busy);
 }
 
@@ -1296,12 +1628,18 @@ int wt_ble_service_stop(void)
 	ble_status_notify_enabled = false;
 	ble_cmd_rsp_notify_enabled = false;
 	wt_ble_status_reschedule();
+	wt_ble_outq_clear(&ble_rsp_outq);
+	wt_ble_outq_clear(&ble_tx_outq);
 	LOG_INF("BLE disabled");
 	return ret;
 }
 
 int wt_ble_transmit_payload(const uint8_t *data, size_t len)
 {
+	if (!data && len > 0) {
+		return -EINVAL;
+	}
+
 	if (!ble_ready) {
 		return -ENODEV;
 	}
@@ -1314,7 +1652,11 @@ int wt_ble_transmit_payload(const uint8_t *data, size_t len)
 		return -EACCES;
 	}
 
-	return wt_ble_notify_chunked(&wt_ble_tx_svc.attrs[2], data, len);
+	if (len <= wt_ble_notify_payload_max()) {
+		return wt_ble_outq_push(&ble_tx_outq, data, len);
+	}
+
+	return wt_ble_tx_stream_payload(data, len);
 }
 #else
 bool wt_ble_is_requested(void)

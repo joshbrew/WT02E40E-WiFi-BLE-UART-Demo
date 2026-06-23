@@ -22,5 +22,6 @@ target_sources(app PRIVATE
 	src/wt_leds.c
 	src/wt_radio.c
 	src/wt_shell.c
+	src/wt_stream.c
 	src/wt_wifi.c
 )

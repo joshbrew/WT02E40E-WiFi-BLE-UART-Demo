@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WT_APP_FW_VERSION "0.3.6-scanled-safe"
+#define WT_APP_FW_VERSION "0.3.9-wifi-led-idle"
 
 int wt_app_settings_init(void);
 int wt_app_config_save(void);
@@ -39,5 +39,6 @@ int wt_app_ping_execute(char **argv, size_t argc, char *rsp, size_t rsp_len);
 int wt_app_boot_command(char **argv, size_t argc, char *rsp, size_t rsp_len);
 int wt_app_bridge_command(char **argv, size_t argc, char *rsp, size_t rsp_len);
 int wt_app_fw_command(char **argv, size_t argc, char *rsp, size_t rsp_len);
+int wt_app_led_command(char **argv, size_t argc, char *rsp, size_t rsp_len);
 
 #endif /* WT_APP_H */

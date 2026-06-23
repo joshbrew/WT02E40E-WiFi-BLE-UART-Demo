@@ -117,6 +117,8 @@
 
     button:disabled { opacity: 0.45; cursor: not-allowed; }
     button.primary { background: #173456; border-color: #315f92; }
+    button.success { background: #143627; border-color: #2e7850; }
+    button.warning { background: #3a3216; border-color: #746229; }
     button.danger { background: #3b1d24; border-color: #733240; }
     button.templateBtn { text-align: left; padding: 9px 10px; font-size: 0.9rem; }
 
@@ -186,6 +188,37 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
+    }
+
+    .quickDeck {
+      display: grid;
+      gap: 10px;
+    }
+
+    .quickGroup {
+      border: 1px solid var(--border);
+      background: rgba(10, 15, 21, 0.38);
+      border-radius: 14px;
+      padding: 10px;
+    }
+
+    .quickGroup h3 {
+      margin-top: 0;
+    }
+
+    .quickCmd small {
+      display: block;
+      color: var(--muted);
+      font-weight: 600;
+      margin-top: 2px;
+    }
+
+    .ledLegend {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.4;
     }
 
     .three {
@@ -288,6 +321,11 @@
         <div class="pill">Response notify: <strong id="responseNotify">off</strong></div>
         <div class="pill">TX notify: <strong id="txNotify">off</strong></div>
         <div class="pill">UDP listener: <strong id="udpState">loading</strong></div>
+        <div class="pill">Wi-Fi: <strong id="wifiState">unknown</strong></div>
+        <div class="pill">IPv4: <strong id="wifiIpState">0.0.0.0</strong></div>
+        <div class="pill">Cmd UDP: <strong id="wifiCmdState">unknown</strong></div>
+        <div class="pill">Discovery: <strong id="discState">unknown</strong></div>
+        <div class="pill">Scan: <strong id="scanState">idle</strong></div>
       </div>
 
       <div class="stack">
@@ -333,17 +371,58 @@
       <h3>One-click common tasks</h3>
       <div class="templates" id="commonTemplateButtons"></div>
 
-      <h2>Quick commands</h2>
-      <div class="quick">
-        <button class="quickCmd" data-cmd="status" disabled>status</button>
-        <button class="quickCmd" data-cmd="mode idle" disabled>mode idle</button>
-        <button class="quickCmd" data-cmd="mode ble" disabled>mode ble</button>
-        <button class="quickCmd" data-cmd="mode wifi" disabled>mode wifi</button>
-        <button class="quickCmd" data-cmd="mode both" disabled>mode both</button>
-        <button class="quickCmd" data-cmd="ble status" disabled>ble status</button>
-        <button class="quickCmd" data-cmd="wifi status" disabled>wifi status</button>
-        <button class="quickCmd" data-cmd="wifi scan json" disabled>wifi scan</button>
-        <button class="quickCmd" data-cmd="wifi cred list" disabled>wifi cred list</button>
+      <h2>Quick command deck</h2>
+      <div class="quickDeck">
+        <div class="quickGroup">
+          <h3>Radio</h3>
+          <div class="quick">
+            <button class="quickCmd" data-cmd="status json" disabled>Status JSON<small>compact full state</small></button>
+            <button class="quickCmd" data-cmd="mode both" disabled>BLE + Wi-Fi<small>keep console alive</small></button>
+            <button class="quickCmd" data-cmd="mode ble" disabled>BLE only<small>Wi-Fi off</small></button>
+            <button class="quickCmd danger" data-cmd="mode idle 5s" disabled>Idle in 5s<small>safe delayed cutoff</small></button>
+            <button class="quickCmd success" data-cmd="ble on" disabled>BLE on<small>advertise</small></button>
+            <button class="quickCmd warning" data-cmd="ble off 5s" disabled>BLE off in 5s<small>disconnect later</small></button>
+          </div>
+        </div>
+
+        <div class="quickGroup">
+          <h3>Wi-Fi</h3>
+          <div class="quick">
+            <button class="quickCmd success" data-cmd="wifi on&#10;wifi status json" disabled>Wi-Fi on<small>connect + status</small></button>
+            <button class="quickCmd danger" data-cmd="wifi off&#10;wifi status json" disabled>Wi-Fi off<small>disconnect radio</small></button>
+            <button class="quickCmd" data-cmd="wifi reconnect&#10;wifi status json" disabled>Reconnect<small>restart association</small></button>
+            <button class="quickCmd" data-cmd="wifi status json" disabled>Wi-Fi status<small>JSON state pills</small></button>
+            <button class="quickCmd success" data-cmd="wifi cmd on&#10;discovery on&#10;wifi status json" disabled>Cmd + discovery on<small>UDP bridge ready</small></button>
+            <button class="quickCmd warning" data-cmd="wifi cmd off&#10;discovery off&#10;wifi status json" disabled>Cmd + discovery off<small>quiet UDP services</small></button>
+          </div>
+        </div>
+
+        <div class="quickGroup">
+          <h3>Scan + credentials</h3>
+          <div class="quick">
+            <button class="quickCmd" data-cmd="wifi scan json" disabled>Scan BLE-safe<small>summary + AP items</small></button>
+            <button class="quickCmd" data-cmd="wifi scan full json" disabled>Scan stream<small>framed long JSON</small></button>
+            <button class="quickCmd" data-cmd="wifi scan last json" disabled>Last scan<small>no new scan</small></button>
+            <button class="quickCmd" data-cmd="wifi cred list" disabled>Cred list<small>runtime credentials</small></button>
+          </div>
+        </div>
+
+        <div class="quickGroup">
+          <h3>Indicator routines</h3>
+          <div class="quick">
+            <button class="quickCmd" data-cmd="led status" disabled>LED status<small>pattern legend</small></button>
+            <button class="quickCmd" data-cmd="led test all" disabled>LED test all<small>blink all aliases</small></button>
+            <button class="quickCmd" data-cmd="led pulse ble" disabled>BLE pulse<small>activity overlay</small></button>
+            <button class="quickCmd" data-cmd="led pulse wifi" disabled>Wi-Fi pulse<small>activity overlay</small></button>
+            <button class="quickCmd" data-cmd="led pulse activity" disabled>Bridge pulse<small>TX/discovery LED</small></button>
+            <button class="quickCmd" data-cmd="led pulse alert" disabled>Alert pulse<small>error LED</small></button>
+          </div>
+          <div class="ledLegend">
+            <div>BLE LED: connected solid, advertising blink, ready idle pulse.</div>
+            <div>Wi-Fi LED: IPv4 solid, scan fast blink, associated double pulse, connecting slow blink.</div>
+            <div>Optional LED2/LED3 aliases show bridge activity and alert/error pulses when the board exposes them.</div>
+          </div>
+        </div>
       </div>
 
       <h2>Wi-Fi credential helper</h2>
@@ -493,7 +572,7 @@
           <li><code>ble on</code>, <code>ble off</code>, <code>ble status</code>. From BLE, <code>ble off</code> responds first and then disconnects.</li>
           <li><code>ble name</code>, <code>ble name set &lt;name&gt;</code>, or top-level <code>name set &lt;name&gt;</code>, changes the advertised BLE name at runtime.</li>
           <li><code>wifi on</code>, <code>wifi off</code>, <code>wifi status</code>, <code>wifi reconnect</code>.</li>
-          <li><code>wifi scan</code>, <code>wifi scan json</code>, <code>wifi scan start</code>, <code>wifi scan last [json]</code>, and <code>wifi scan item &lt;n&gt; json</code>, scans nearby APs with sub-250-byte BLE responses.</li>
+          <li><code>wifi scan</code>, <code>wifi scan json</code>, <code>wifi scan start</code>, <code>wifi scan last [json]</code>, and <code>wifi scan item &lt;n&gt; json</code>, scan nearby APs with small BLE-safe responses. <code>wifi scan full json</code> returns one framed response stream.</li>
           <li><code>wifi scan connect &lt;index&gt; &lt;password&gt; [wpa2|auto|wpa3]</code> and <code>wifi scan open &lt;index&gt;</code>, use a scan result to configure credentials.</li>
           <li><code>wifi cmd on</code>, <code>wifi cmd off</code>, <code>wifi cmd status</code>, and <code>wifi cmd port [port]</code>, controls and live-rebinds the UDP command listener.</li>
           <li><code>discovery on</code>, <code>discovery off</code>, <code>discovery status</code>, controls UDP discovery beacons to port 5000.</li>
@@ -543,7 +622,7 @@
   <script>
     "use strict";
 
-    const WEBAPP_VERSION = "2026-06-22-wifi-scan-led-safe-v17";
+    const WEBAPP_VERSION = "2026-06-22-gatt-serial-v23";
 
     const UUIDS = {
       service: "7f1c0001-2b5a-4f2d-9a31-d6a5f4e040e1",
@@ -590,6 +669,7 @@
       { group: "Wi-Fi", name: "Wi-Fi reconnect", cmd: "wifi reconnect", desc: "Restart Wi-Fi connection attempt." },
       { group: "Wi-Fi", name: "Scan networks", cmd: "wifi scan", desc: "Scan nearby Wi-Fi networks and return a compact text list." },
       { group: "Wi-Fi", name: "Scan networks JSON", cmd: "wifi scan json", desc: "Scan nearby Wi-Fi networks and return structured JSON for the webapp." },
+      { group: "Wi-Fi", name: "Scan full JSON stream", cmd: "wifi scan full json", desc: "Scan nearby Wi-Fi networks and return one framed JSON stream." },
       { group: "Wi-Fi", name: "Last scan JSON", cmd: "wifi scan last json", desc: "Read the last scan summary without starting a new scan." },
       { group: "Wi-Fi", name: "Scan item JSON", cmd: "wifi scan item 1 json", desc: "Read one scan result in a sub-250-byte JSON response." },
       { group: "Wi-Fi", name: "Connect scan result", cmd: "wifi scan connect 1 YOUR_PASSWORD wpa2", desc: "Use scan result #1 with the password helper, then start Wi-Fi." },
@@ -616,6 +696,13 @@
       { group: "Bridge", name: "Bridge Wi-Fi on", cmd: "bridge wifi on", desc: "Enable bridge forwarding to the configured Wi-Fi target." },
       { group: "Bridge", name: "Bridge all on", cmd: "bridge all on", desc: "Enable BLE, UART, and Wi-Fi bridge outputs." },
       { group: "Bridge", name: "Bridge send", cmd: "bridge send hello over configured bridge outputs", desc: "Send one payload through enabled bridge outputs." },
+
+      { group: "Indicators", name: "LED status", cmd: "led status", desc: "Show LED indicator meaning and available LED aliases." },
+      { group: "Indicators", name: "LED test all", cmd: "led test all", desc: "Blink all firmware indicator outputs that exist on the board." },
+      { group: "Indicators", name: "LED BLE pulse", cmd: "led pulse ble", desc: "Pulse the BLE indicator overlay." },
+      { group: "Indicators", name: "LED Wi-Fi pulse", cmd: "led pulse wifi", desc: "Pulse the Wi-Fi indicator overlay." },
+      { group: "Indicators", name: "LED bridge pulse", cmd: "led pulse activity", desc: "Pulse the bridge/activity indicator overlay." },
+      { group: "Indicators", name: "LED alert pulse", cmd: "led pulse alert", desc: "Pulse the alert/error indicator overlay." },
       { group: "Ping", name: "Ping local", cmd: "ping", desc: "Basic command round-trip ping." },
       { group: "Ping", name: "Ping BLE TX", cmd: "ping ble", desc: "Send a ping over BLE TX notify if subscribed." },
       { group: "Ping", name: "Ping Wi-Fi to this page", cmd: "ping wifi HOST_IP 5000", desc: "Send a UDP ping to this Node page." },
@@ -634,6 +721,8 @@
     const COMMON_TEMPLATE_NAMES = [
       "Full status",
       "BLE + Wi-Fi",
+      "Wi-Fi on",
+      "Wi-Fi off",
       "Configure and enable Wi-Fi",
       "Send board UDP to this page",
       "Wi-Fi command status",
@@ -643,6 +732,8 @@
       "Device identity",
       "Request ID test",
       "Bridge status",
+      "LED status",
+      "LED test all",
       "Ping local",
       "Firmware status",
       "UART TX",
@@ -667,6 +758,7 @@
       lastStatusAt: 0,
       lastStatusSource: "",
       readStatusBusy: false,
+      responseReadBusy: false,
       suppressStatusEventsUntil: 0,
       lastResponseText: "",
       lastResponseAt: 0,
@@ -677,7 +769,16 @@
       pendingJsonAt: 0,
       scanPollTimer: null,
       scanItemTimer: null,
-      commandBusy: false
+      commandBusy: false,
+      commandQueue: [],
+      commandFlushPromise: null,
+      wifiCommandQueue: [],
+      wifiCommandFlushPromise: null,
+      udpTxQueue: [],
+      udpTxFlushPromise: null,
+      responseStreams: new Map(),
+      txStreams: new Map(),
+      udpStreams: new Map()
     };
 
     const encoder = new TextEncoder();
@@ -686,7 +787,8 @@
     const el = {};
     for (const id of [
       "connectBtn", "disconnectBtn", "connDot", "connState", "deviceName",
-      "statusNotify", "responseNotify", "txNotify", "udpState", "readStatusBtn",
+      "statusNotify", "responseNotify", "txNotify", "udpState", "wifiState", "wifiIpState",
+      "wifiCmdState", "discState", "scanState", "readStatusBtn",
       "statusSubBtn", "responseSubBtn", "txSubBtn", "commandInput", "sendCommandBtn",
       "clearCommandBtn", "insertTemplateBtn", "templateSelect", "templateDescription",
       "sendTemplateBtn", "commonTemplateButtons", "ssidInput", "passwordInput",
@@ -717,8 +819,12 @@
       return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    function stripTrailingNuls(text) {
+      return String(text ?? "").replace(/\0+$/g, "");
+    }
+
     function cleanBleText(text) {
-      return String(text ?? "").replace(/\0+$/g, "").trimEnd();
+      return stripTrailingNuls(text).trimEnd();
     }
 
     function logStatusText(text, source = "status") {
@@ -754,7 +860,61 @@
       }
     }
 
-    function logResponseText(text) {
+    function handleResponseStreamFrame(rawText) {
+      const text = stripTrailingNuls(rawText);
+
+      if (/^~S\d{3}$/.test(text)) {
+        const id = text.slice(2, 5);
+        state.responseStreams.set(id, { chunks: [], startedAt: performance.now() });
+        return true;
+      }
+
+      if (/^~C\d{6}/.test(text)) {
+        const id = text.slice(2, 5);
+        const seq = Number(text.slice(5, 8));
+        const payload = text.slice(8);
+        let stream = state.responseStreams.get(id);
+
+        if (!stream) {
+          stream = { chunks: [], startedAt: performance.now() };
+          state.responseStreams.set(id, stream);
+        }
+
+        stream.chunks[seq] = payload;
+        return true;
+      }
+
+      if (/^~E\d{6}$/.test(text)) {
+        const id = text.slice(2, 5);
+        const expected = Number(text.slice(5, 8));
+        const stream = state.responseStreams.get(id);
+
+        if (!stream) {
+          return true;
+        }
+
+        const missing = [];
+        for (let i = 0; i < expected; i += 1) {
+          if (stream.chunks[i] === undefined) {
+            missing.push(i);
+          }
+        }
+
+        state.responseStreams.delete(id);
+
+        if (missing.length) {
+          log(`STREAM <= ${id} missing chunk(s): ${missing.join(",")}`, "warn");
+          return true;
+        }
+
+        logCompleteResponse(stream.chunks.join(""));
+        return true;
+      }
+
+      return false;
+    }
+
+    function logCompleteResponse(text) {
       const now = performance.now();
       const parsedDirect = tryParseJsonResponse(text);
 
@@ -795,6 +955,67 @@
       state.lastResponseAt = now;
       log(`RESP   <= ${text}`, "resp");
       handleMaybeScanJson(text);
+    }
+
+    function logResponseText(text) {
+      const raw = stripTrailingNuls(text);
+      if (handleResponseStreamFrame(raw)) {
+        return;
+      }
+      logCompleteResponse(cleanBleText(raw));
+    }
+
+    function handleTxStreamFrame(rawText) {
+      const text = stripTrailingNuls(rawText);
+
+      if (/^~S\d{3}$/.test(text)) {
+        const id = text.slice(2, 5);
+        state.txStreams.set(id, { chunks: [], startedAt: performance.now() });
+        return true;
+      }
+
+      if (/^~C\d{6}/.test(text)) {
+        const id = text.slice(2, 5);
+        const seq = Number(text.slice(5, 8));
+        let stream = state.txStreams.get(id);
+
+        if (!stream) {
+          stream = { chunks: [], startedAt: performance.now() };
+          state.txStreams.set(id, stream);
+        }
+
+        stream.chunks[seq] = text.slice(8);
+        return true;
+      }
+
+      if (/^~E\d{6}$/.test(text)) {
+        const id = text.slice(2, 5);
+        const expected = Number(text.slice(5, 8));
+        const stream = state.txStreams.get(id);
+
+        if (!stream) {
+          return true;
+        }
+
+        const missing = [];
+        for (let i = 0; i < expected; i += 1) {
+          if (stream.chunks[i] === undefined) {
+            missing.push(i);
+          }
+        }
+
+        state.txStreams.delete(id);
+
+        if (missing.length) {
+          log(`TXSTR  <= ${id} missing chunk(s): ${missing.join(",")}`, "warn");
+          return true;
+        }
+
+        log(`TX     <= ${stream.chunks.join("")}`, "tx");
+        return true;
+      }
+
+      return false;
     }
 
     function lineNeedsTxNotify(line) {
@@ -1027,7 +1248,9 @@
         if (state.chars.txNotify) {
           state.chars.txNotify.addEventListener("characteristicvaluechanged", event => {
             const text = decoder.decode(event.target.value);
-            log(`TX     <= ${text}`, "tx");
+            if (!handleTxStreamFrame(text)) {
+              log(`TX     <= ${cleanBleText(stripTrailingNuls(text))}`, "tx");
+            }
           });
         }
 
@@ -1090,9 +1313,11 @@
     }
 
     async function readCommandResponse() {
-      if (!state.chars.commandResponse) {
+      if (!state.chars.commandResponse || state.responseReadBusy) {
         return;
       }
+
+      state.responseReadBusy = true;
 
       try {
         const text = await readTextCharacteristic(state.chars.commandResponse);
@@ -1101,6 +1326,10 @@
         }
       } catch (err) {
         log(`Response read failed: ${err.message}`, "warn");
+      } finally {
+        setTimeout(() => {
+          state.responseReadBusy = false;
+        }, 150);
       }
     }
 
@@ -1155,7 +1384,7 @@
     }
 
     async function writeCommand(command) {
-      const lines = command.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      const lines = String(command ?? "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
 
       if (!lines.length) {
         log("Nothing to send", "warn");
@@ -1167,47 +1396,71 @@
         return;
       }
 
-      if (state.commandBusy) {
-        log("Command path busy, ignoring duplicate click", "warn");
-        return;
+      state.commandQueue.push(...lines);
+      return flushCommandQueue();
+    }
+
+    async function flushCommandQueue() {
+      if (state.commandFlushPromise) {
+        return state.commandFlushPromise;
       }
 
-      state.commandBusy = true;
-      setConnectedUi(Boolean(state.server?.connected));
+      state.commandFlushPromise = (async () => {
+        state.commandBusy = true;
+        setConnectedUi(Boolean(state.server?.connected));
 
-      try {
-        for (const line of lines) {
-          if (lineNeedsTxNotify(line) && state.chars.txNotify && !state.txNotifications) {
-            log("Enabling BLE TX notifications before tx ble/tx both", "info");
-            await toggleTxNotifications(true);
-            await sleep(80);
-          }
+        try {
+          while (state.commandQueue.length) {
+            const line = state.commandQueue.shift();
 
-          const payload = encoder.encode(line);
-
-          log(`CMD    => ${line}`, "cmd");
-
-          try {
-            if (state.chars.commandWrite.properties.write) {
-              await state.chars.commandWrite.writeValueWithResponse(payload);
-            } else if (state.chars.commandWrite.properties.writeWithoutResponse) {
-              await state.chars.commandWrite.writeValueWithoutResponse(payload);
-            } else {
-              await state.chars.commandWrite.writeValue(payload);
+            if (!state.chars.commandWrite) {
+              log("Command write characteristic not available", "error");
+              state.commandQueue.length = 0;
+              break;
             }
 
-            setTimeout(readCommandResponse, 180);
+            if (lineNeedsTxNotify(line) && state.chars.txNotify && !state.txNotifications) {
+              log("Enabling BLE TX notifications before tx ble/tx both", "info");
+              await toggleTxNotifications(true);
+              await sleep(80);
+            }
 
-            await sleep(120);
-          } catch (err) {
-            log(`CMDERR <= ${line}: ${err.message}`, "error");
-            break;
+            const payload = encoder.encode(line);
+            log(`CMD    => ${line}`, "cmd");
+
+            try {
+              if (state.chars.commandWrite.properties.write) {
+                await state.chars.commandWrite.writeValueWithResponse(payload);
+              } else if (state.chars.commandWrite.properties.writeWithoutResponse) {
+                await state.chars.commandWrite.writeValueWithoutResponse(payload);
+              } else {
+                await state.chars.commandWrite.writeValue(payload);
+              }
+
+              if (!state.responseNotifications) {
+                await sleep(220);
+                await readCommandResponse();
+                await sleep(120);
+              } else {
+                await sleep(260);
+              }
+            } catch (err) {
+              log(`CMDERR <= ${line}: ${err.message}`, "error");
+              break;
+            }
+          }
+        } finally {
+          state.commandBusy = false;
+          state.commandFlushPromise = null;
+          setConnectedUi(Boolean(state.server?.connected));
+
+          if (state.commandQueue.length) {
+            setTimeout(() => flushCommandQueue(), 0);
           }
         }
-      } finally {
-        state.commandBusy = false;
-        setConnectedUi(Boolean(state.server?.connected));
-      }
+      })();
+
+      return state.commandFlushPromise;
     }
 
     async function loadConfig() {
@@ -1257,6 +1510,92 @@
       }
     }
 
+    function processUdpRxMessage(msg) {
+      if (el.boardIpInput && msg.address && !el.boardIpInput.value) {
+        el.boardIpInput.value = msg.address;
+      }
+
+      try {
+        const parsed = JSON.parse(msg.text);
+        if (parsed && parsed.type === "wifi_scan") {
+          updateScanResults(parsed.results || []);
+          log(`SCAN <= ${msg.address} ${parsed.count || 0} network(s)`, "wifi");
+        } else if (parsed && parsed.type === "wifi_scan_item") {
+          mergeScanItem(parsed);
+          log(`SCANAP <= ${msg.address} ${parsed.i}: ${parsed.ssid} ${parsed.rssi} dBm`, "wifi");
+        } else if (parsed && parsed.type === "wt02e40e_discovery") {
+          if (el.boardIpInput && msg.address) {
+            el.boardIpInput.value = msg.address;
+          }
+          if (el.boardCmdPortInput && parsed.cmd_port) {
+            el.boardCmdPortInput.value = String(parsed.cmd_port);
+          }
+          log(`DISC <= ${msg.address} name=${parsed.name} fw=${parsed.fw} cmd_port=${parsed.cmd_port}`, "wifi");
+        } else {
+          log(`UDP <= ${msg.from} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
+        }
+      } catch (_) {
+        log(`UDP <= ${msg.from} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
+      }
+    }
+
+    function handleUdpStreamFrame(msg) {
+      const text = stripTrailingNuls(msg.text);
+      const source = msg.address || msg.from || "udp";
+
+      if (/^~S\d{3}$/.test(text)) {
+        const id = text.slice(2, 5);
+        state.udpStreams.set(`${source}:${id}`, { chunks: [], startedAt: performance.now() });
+        return true;
+      }
+
+      if (/^~C\d{6}/.test(text)) {
+        const id = text.slice(2, 5);
+        const seq = Number(text.slice(5, 8));
+        const key = `${source}:${id}`;
+        let stream = state.udpStreams.get(key);
+
+        if (!stream) {
+          stream = { chunks: [], startedAt: performance.now() };
+          state.udpStreams.set(key, stream);
+        }
+
+        stream.chunks[seq] = text.slice(8);
+        return true;
+      }
+
+      if (/^~E\d{6}$/.test(text)) {
+        const id = text.slice(2, 5);
+        const expected = Number(text.slice(5, 8));
+        const key = `${source}:${id}`;
+        const stream = state.udpStreams.get(key);
+
+        if (!stream) {
+          return true;
+        }
+
+        const missing = [];
+        for (let i = 0; i < expected; i += 1) {
+          if (stream.chunks[i] === undefined) {
+            missing.push(i);
+          }
+        }
+
+        state.udpStreams.delete(key);
+
+        if (missing.length) {
+          log(`UDPSTR <= ${source} ${id} missing chunk(s): ${missing.join(",")}`, "warn");
+          return true;
+        }
+
+        const textFull = stream.chunks.join("");
+        processUdpRxMessage({ ...msg, text: textFull, length: textFull.length });
+        return true;
+      }
+
+      return false;
+    }
+
     function connectEvents() {
       if (!state.config) {
         return;
@@ -1281,30 +1620,8 @@
         const msg = JSON.parse(event.data);
 
         if (msg.type === "udp_rx") {
-          if (el.boardIpInput && msg.address && !el.boardIpInput.value) {
-            el.boardIpInput.value = msg.address;
-          }
-          try {
-            const parsed = JSON.parse(msg.text);
-            if (parsed && parsed.type === "wifi_scan") {
-              updateScanResults(parsed.results || []);
-              log(`SCAN <= ${msg.address} ${parsed.count || 0} network(s)`, "wifi");
-            } else if (parsed && parsed.type === "wifi_scan_item") {
-              mergeScanItem(parsed);
-              log(`SCANAP <= ${msg.address} ${parsed.i}: ${parsed.ssid} ${parsed.rssi} dBm`, "wifi");
-            } else if (parsed && parsed.type === "wt02e40e_discovery") {
-              if (el.boardIpInput && msg.address) {
-                el.boardIpInput.value = msg.address;
-              }
-              if (el.boardCmdPortInput && parsed.cmd_port) {
-                el.boardCmdPortInput.value = String(parsed.cmd_port);
-              }
-              log(`DISC <= ${msg.address} name=${parsed.name} fw=${parsed.fw} cmd_port=${parsed.cmd_port}`, "wifi");
-            } else {
-              log(`UDP <= ${msg.from} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
-            }
-          } catch (_) {
-            log(`UDP <= ${msg.from} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
+          if (!handleUdpStreamFrame(msg)) {
+            processUdpRxMessage(msg);
           }
         } else if (msg.type === "udp_tx") {
           log(`UDP => ${msg.to} ${JSON.stringify(msg.text)} (${msg.length} bytes)`, "wifi");
@@ -1318,36 +1635,72 @@
       };
     }
 
+    async function sendNodeUdpPacket(host, port, text) {
+      const res = await fetch("/api/udp/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ host, port, text })
+      });
+
+      const data = await res.json();
+
+      if (!data.ok) {
+        throw new Error(data.error || "send failed");
+      }
+
+      return data;
+    }
+
     async function sendWifiCommandFromNode() {
       const host = el.boardIpInput.value.trim();
       const port = selectedBoardCmdPort();
-      const text = el.wifiCommandInput.value.trim();
+      const lines = el.wifiCommandInput.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
 
       if (!host) {
         log("Board IP is empty. Fill it from the device status / router / UDP sender.", "warn");
         return;
       }
 
-      if (!text) {
+      if (!lines.length) {
         log("Wi-Fi command is empty", "warn");
         return;
       }
 
-      try {
-        log(`WIFI CMD => ${host}:${port} ${text}`, "cmd");
-        const res = await fetch("/api/udp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ host, port, text })
-        });
+      for (const text of lines) {
+        state.wifiCommandQueue.push({ host, port, text });
+      }
 
-        const data = await res.json();
+      return flushWifiCommandQueue();
+    }
 
-        if (!data.ok) {
-          log(`Wi-Fi command UDP send failed: ${data.error}`, "error");
+    async function flushWifiCommandQueue() {
+      if (state.wifiCommandFlushPromise) {
+        return state.wifiCommandFlushPromise;
+      }
+
+      state.wifiCommandFlushPromise = (async () => {
+        while (state.wifiCommandQueue.length) {
+          const item = state.wifiCommandQueue.shift();
+
+          try {
+            log(`WIFI CMD => ${item.host}:${item.port} ${item.text}`, "cmd");
+            await sendNodeUdpPacket(item.host, item.port, item.text);
+            await sleep(80);
+          } catch (err) {
+            log(`Wi-Fi command UDP send failed: ${err.message}`, "error");
+            break;
+          }
         }
-      } catch (err) {
-        log(`Wi-Fi command UDP send failed: ${err.message}`, "error");
+      })();
+
+      try {
+        await state.wifiCommandFlushPromise;
+      } finally {
+        state.wifiCommandFlushPromise = null;
+
+        if (state.wifiCommandQueue.length) {
+          setTimeout(() => flushWifiCommandQueue(), 0);
+        }
       }
     }
 
@@ -1356,20 +1709,42 @@
       const port = Number(el.udpTargetPort.value);
       const text = el.udpSendText.value;
 
-      try {
-        const res = await fetch("/api/udp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ host, port, text })
-        });
+      if (!host || !port) {
+        log("UDP target host/port is empty", "warn");
+        return;
+      }
 
-        const data = await res.json();
+      state.udpTxQueue.push({ host, port, text });
+      return flushUdpTxQueue();
+    }
 
-        if (!data.ok) {
-          log(`Node UDP send failed: ${data.error}`, "error");
+    async function flushUdpTxQueue() {
+      if (state.udpTxFlushPromise) {
+        return state.udpTxFlushPromise;
+      }
+
+      state.udpTxFlushPromise = (async () => {
+        while (state.udpTxQueue.length) {
+          const item = state.udpTxQueue.shift();
+
+          try {
+            await sendNodeUdpPacket(item.host, item.port, item.text);
+            await sleep(50);
+          } catch (err) {
+            log(`Node UDP send failed: ${err.message}`, "error");
+            break;
+          }
         }
-      } catch (err) {
-        log(`Node UDP send failed: ${err.message}`, "error");
+      })();
+
+      try {
+        await state.udpTxFlushPromise;
+      } finally {
+        state.udpTxFlushPromise = null;
+
+        if (state.udpTxQueue.length) {
+          setTimeout(() => flushUdpTxQueue(), 0);
+        }
       }
     }
 
@@ -1429,6 +1804,51 @@
       state.scanItemTimer = setTimeout(() => writeCommand(commands.join("\n")), 250);
     }
 
+    function setTextIfPresent(node, value) {
+      if (node) {
+        node.textContent = String(value);
+      }
+    }
+
+    function onOff(value) {
+      return value ? "on" : "off";
+    }
+
+    function updateWifiStatusPills(parsed) {
+      if (!parsed || typeof parsed !== "object") {
+        return;
+      }
+
+      if (parsed.type === "wifi_status") {
+        const req = Boolean(parsed.req);
+        const assoc = Boolean(parsed.assoc);
+        const ipv4 = Boolean(parsed.ipv4);
+        const scan = Boolean(parsed.scan);
+        setTextIfPresent(el.wifiState, ipv4 ? "online" : assoc ? "associated" : req ? "connecting" : "off");
+        setTextIfPresent(el.wifiIpState, parsed.ip || "0.0.0.0");
+        setTextIfPresent(el.wifiCmdState, `${onOff(Boolean(parsed.cmd))}:${parsed.cmd_port || selectedBoardCmdPort()}`);
+        setTextIfPresent(el.discState, onOff(Boolean(parsed.disc)));
+        setTextIfPresent(el.scanState, scan ? `running (${parsed.scan_count || 0})` : `idle (${parsed.scan_count || 0})`);
+        if (parsed.ip && parsed.ip !== "0.0.0.0" && el.boardIpInput && !el.boardIpInput.value.trim()) {
+          el.boardIpInput.value = parsed.ip;
+        }
+        return;
+      }
+
+      if (parsed.t === "cfg") {
+        const wifiOn = Boolean(parsed.wifi);
+        const scan = Boolean(parsed.scan);
+        setTextIfPresent(el.wifiState, parsed.ip && parsed.ip !== "0.0.0.0" ? "online" : wifiOn ? "requested" : "off");
+        setTextIfPresent(el.wifiIpState, parsed.ip || "0.0.0.0");
+        setTextIfPresent(el.wifiCmdState, parsed.cmd ? `:${parsed.cmd}` : "unknown");
+        setTextIfPresent(el.discState, onOff(Boolean(parsed.disc)));
+        setTextIfPresent(el.scanState, scan ? `running (${parsed.cnt || 0})` : `idle (${parsed.cnt || 0})`);
+        if (parsed.ip && parsed.ip !== "0.0.0.0" && el.boardIpInput && !el.boardIpInput.value.trim()) {
+          el.boardIpInput.value = parsed.ip;
+        }
+      }
+    }
+
     function handleMaybeScanJson(text) {
       const cleaned = stripRequestId(text);
       if (!cleaned.startsWith("{")) {
@@ -1437,6 +1857,7 @@
 
       try {
         const parsed = JSON.parse(cleaned);
+        updateWifiStatusPills(parsed);
         if (parsed && parsed.type === "wifi_scan") {
           updateScanResults(parsed.results || []);
           log(`SCAN   <= ${parsed.count || 0} network(s), running=${parsed.running}`, "wifi");
@@ -1601,7 +2022,7 @@
     });
 
     el.setBoardCmdPortBtn.addEventListener("click", () => {
-      const port = currentBoardCommandPort();
+      const port = selectedBoardCmdPort();
       writeCommand(`wifi cmd port ${port}`);
       log(`After response, the board should rebind its UDP command socket to ${port}.`, "node");
     });

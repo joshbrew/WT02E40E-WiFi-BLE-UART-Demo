@@ -18,6 +18,7 @@
 #include "wt_ble.h"
 #include "wt_common.h"
 #include "wt_config.h"
+#include "wt_leds.h"
 #include "wt_radio.h"
 #include "wt_wifi.h"
 
@@ -541,7 +542,7 @@ int wt_app_config_reset(void)
 	if (ret) { return ret; }
 	ret = wt_wifi_discovery_service_set(false);
 	if (ret) { return ret; }
-	ret = wt_wifi_cmd_service_set(true);
+	ret = wt_wifi_cmd_service_set(false);
 	if (ret) { return ret; }
 	ret = wt_wifi_cmd_port_set(WT_WIFI_CMD_UDP_PORT);
 	if (ret) { return ret; }
@@ -684,6 +685,50 @@ int wt_app_config_format(char *buf, size_t size, bool json)
 			       wt_onoff_txt(bridge_ble_enabled), wt_onoff_txt(bridge_uart_enabled),
 			       wt_onoff_txt(bridge_wifi_enabled), bridge_wifi_ip[0] ? bridge_wifi_ip : "<unset>",
 			       bridge_wifi_port, WT_TX_PAYLOAD_MAX, (long long)(k_uptime_get() / 1000));
+}
+
+
+int wt_app_led_command(char **argv, size_t argc, char *rsp, size_t rsp_len)
+{
+	int ret;
+	const char *target = argc >= 3 ? argv[2] : "all";
+
+	if (!rsp || rsp_len == 0) {
+		return -EINVAL;
+	}
+
+	if (argc < 2 || !strcmp(argv[1], "status")) {
+		return wt_leds_status_format(rsp, rsp_len);
+	}
+
+	if (!strcmp(argv[1], "test")) {
+		ret = wt_leds_test(target);
+		return ret ? app_rsp(rsp, rsp_len, "err led test %d", ret) :
+		       app_rsp(rsp, rsp_len, "ok led test %s", target);
+	}
+
+	if (!strcmp(argv[1], "pulse") || !strcmp(argv[1], "activity")) {
+		if (!strcmp(target, "all")) {
+			wt_leds_ble_activity();
+			wt_leds_wifi_activity();
+			wt_leds_bridge_activity();
+			wt_leds_error_activity();
+		} else if (!strcmp(target, "ble") || !strcmp(target, "bt")) {
+			wt_leds_ble_activity();
+		} else if (!strcmp(target, "wifi") || !strcmp(target, "wi-fi")) {
+			wt_leds_wifi_activity();
+		} else if (!strcmp(target, "bridge") || !strcmp(target, "tx") || !strcmp(target, "activity")) {
+			wt_leds_bridge_activity();
+		} else if (!strcmp(target, "alert") || !strcmp(target, "error") || !strcmp(target, "err")) {
+			wt_leds_error_activity();
+		} else {
+			return app_rsp(rsp, rsp_len, "usage led status|test [all|ble|wifi|activity|alert]|pulse [all|ble|wifi|activity|alert]");
+		}
+
+		return app_rsp(rsp, rsp_len, "ok led pulse %s", target);
+	}
+
+	return app_rsp(rsp, rsp_len, "usage led status|test [all|ble|wifi|activity|alert]|pulse [all|ble|wifi|activity|alert]");
 }
 
 int wt_app_ping_execute(char **argv, size_t argc, char *rsp, size_t rsp_len)
