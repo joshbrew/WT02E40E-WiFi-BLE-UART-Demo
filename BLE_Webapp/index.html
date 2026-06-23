@@ -769,6 +769,8 @@
       pendingJsonAt: 0,
       scanPollTimer: null,
       scanItemTimer: null,
+      scanRetryTimer: null,
+      scanBusyRetryCount: 0,
       commandBusy: false,
       commandQueue: [],
       commandFlushPromise: null,
@@ -1849,6 +1851,22 @@
       }
     }
 
+    function scheduleWifiScanRetry(reason) {
+      clearTimeout(state.scanRetryTimer);
+
+      if (state.scanBusyRetryCount >= 4) {
+        log(`SCAN   <= radio busy after retries (${reason})`, "warn");
+        return;
+      }
+
+      const retryNumber = state.scanBusyRetryCount + 1;
+      const delayMs = 1000 + state.scanBusyRetryCount * 500;
+      state.scanBusyRetryCount = retryNumber;
+
+      log(`SCAN   <= radio busy (${reason}), retry ${retryNumber}/4 in ${delayMs} ms`, "wifi");
+      state.scanRetryTimer = setTimeout(() => writeCommand("wifi scan json"), delayMs);
+    }
+
     function handleMaybeScanJson(text) {
       const cleaned = stripRequestId(text);
       if (!cleaned.startsWith("{")) {
@@ -1858,7 +1876,30 @@
       try {
         const parsed = JSON.parse(cleaned);
         updateWifiStatusPills(parsed);
+        if (parsed && Number(parsed.error) && !parsed.type) {
+          const errorCode = Number(parsed.error);
+          if (errorCode === -16 || errorCode === -11) {
+            updateScanResults([]);
+            setTextIfPresent(el.scanState, "busy, retrying");
+            scheduleWifiScanRetry(errorCode);
+            return;
+          }
+        }
         if (parsed && parsed.type === "wifi_scan") {
+          const scanStatus = Number(parsed.status ?? 0);
+          const scanError = Number(parsed.error ?? 0);
+          const radioBusy = scanError === -16 || scanError === -11 ||
+            (!parsed.running && !parsed.valid && (scanStatus === -16 || scanStatus === -11));
+
+          if (radioBusy) {
+            updateScanResults([]);
+            setTextIfPresent(el.scanState, "busy, retrying");
+            scheduleWifiScanRetry(scanError || scanStatus);
+            return;
+          }
+
+          state.scanBusyRetryCount = 0;
+          clearTimeout(state.scanRetryTimer);
           updateScanResults(parsed.results || []);
           log(`SCAN   <= ${parsed.count || 0} network(s), running=${parsed.running}`, "wifi");
           if (parsed.running) {
@@ -1971,7 +2012,13 @@
     el.sendTemplateBtn.addEventListener("click", sendTemplate);
 
     for (const btn of el.quickCmds) {
-      btn.addEventListener("click", () => writeCommand(btn.dataset.cmd));
+      btn.addEventListener("click", () => {
+        if (btn.dataset.cmd === "wifi scan json") {
+          state.scanBusyRetryCount = 0;
+          clearTimeout(state.scanRetryTimer);
+        }
+        writeCommand(btn.dataset.cmd);
+      });
     }
 
     el.setCredBtn.addEventListener("click", () => {
@@ -1982,6 +2029,8 @@
     });
 
     el.scanWifiBleBtn.addEventListener("click", () => {
+      state.scanBusyRetryCount = 0;
+      clearTimeout(state.scanRetryTimer);
       writeCommand("wifi scan json");
     });
 
