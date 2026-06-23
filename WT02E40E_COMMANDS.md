@@ -118,6 +118,17 @@ wt tx wifi 192.168.1.50 5000 "payload with spaces"
 
 Backslash escapes are supported inside quoted BLE and UDP command arguments for quotes, backslashes, tabs, carriage returns, and newlines.
 
+
+## Wi-Fi power model
+
+```txt
+wt wifi on         # prepare/enable Wi-Fi interface, no automatic association
+wt wifi reconnect  # connect/reconnect using stored credentials
+wt wifi off        # turn Wi-Fi request off
+```
+
+`wt wifi scan json` can run from BLE-only boot. It temporarily powers Wi-Fi if needed, scans, then turns Wi-Fi back off unless Wi-Fi was already explicitly on.
+
 ## Wi-Fi scan
 
 BLE-safe scan. The scan path waits for Wi-Fi radio readiness and retries briefly if the radio is busy. When Wi-Fi is off, scan uses temporary radio power and turns it back off after the scan. Use `wt wifi reconnect` to associate with stored credentials.
