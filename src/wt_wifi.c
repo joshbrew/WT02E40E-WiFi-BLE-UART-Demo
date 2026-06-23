@@ -46,6 +46,10 @@ static const uint8_t wifi_mac_addr[6] = DT_PROP_OR(WIFI_NODE, local_mac_address,
 
 #define WIFI_MGMT_EVENTS (NET_EVENT_WIFI_CONNECT_RESULT | NET_EVENT_WIFI_DISCONNECT_RESULT)
 
+#define WT_WIFI_SCAN_POWER_SETTLE_MS 1200
+#define WT_WIFI_SCAN_BUSY_RETRY_COUNT 10
+#define WT_WIFI_SCAN_BUSY_RETRY_MS 200
+
 static struct net_mgmt_event_callback wifi_mgmt_cb;
 static struct net_mgmt_event_callback wifi_scan_mgmt_cb;
 static struct net_mgmt_event_callback net_mgmt_cb;
@@ -58,11 +62,16 @@ static bool wifi_ready_status;
 
 static volatile bool wifi_requested;
 static bool wifi_prepared;
+static int64_t wifi_requested_since_ms;
+static volatile bool wifi_connect_requested;
+static volatile bool wifi_scan_auto_power;
+static K_MUTEX_DEFINE(wifi_prepare_lock);
 static volatile bool wifi_cmd_enabled;
 static volatile uint16_t wifi_cmd_port_current = WT_WIFI_CMD_UDP_PORT;
 static volatile bool wifi_discovery_enabled;
 
 static int wifi_prepare_once(void);
+static int wifi_disconnect(void);
 static int wt_wifi_cmd_rsp(char *rsp, size_t rsp_len, const char *fmt, ...);
 static int wifi_cmd_socket_open(uint16_t port);
 static void wifi_cmd_thread(void *p1, void *p2, void *p3);
@@ -100,6 +109,7 @@ struct wt_wifi_scan_entry {
 };
 
 static struct wt_wifi_scan_entry wifi_scan_results[WT_WIFI_SCAN_MAX_RESULTS];
+static volatile bool wifi_scan_requested;
 static volatile bool wifi_scan_running;
 static volatile bool wifi_scan_valid;
 static int wifi_scan_result_count;
@@ -108,6 +118,8 @@ static int64_t wifi_scan_started_ms;
 static int64_t wifi_scan_finished_ms;
 static K_SEM_DEFINE(wifi_scan_done_sem, 0, 1);
 static K_MUTEX_DEFINE(wifi_scan_lock);
+static void wt_wifi_scan_auto_off_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(wifi_scan_auto_off_work, wt_wifi_scan_auto_off_work_handler);
 
 bool wt_wifi_is_requested(void)
 {
@@ -207,7 +219,7 @@ bool wt_wifi_discovery_is_enabled(void)
 
 bool wt_wifi_scan_is_running(void)
 {
-	return wifi_scan_running;
+	return wifi_scan_requested || wifi_scan_running;
 }
 
 int wt_wifi_scan_count(void)
@@ -368,35 +380,87 @@ static void wt_wifi_scan_store_result(const struct wifi_scan_result *entry)
 	k_mutex_unlock(&wifi_scan_lock);
 }
 
+static void wt_wifi_scan_mark_started_locked(void)
+{
+	wt_wifi_scan_clear_locked();
+	wifi_scan_running = true;
+	wifi_scan_last_status = -EINPROGRESS;
+	wifi_scan_started_ms = k_uptime_get();
+	k_sem_reset(&wifi_scan_done_sem);
+}
+
+static void wt_wifi_scan_mark_start_failed(int ret)
+{
+	k_mutex_lock(&wifi_scan_lock, K_FOREVER);
+	wifi_scan_requested = false;
+	wifi_scan_running = false;
+	wifi_scan_last_status = ret;
+	wifi_scan_finished_ms = k_uptime_get();
+	k_mutex_unlock(&wifi_scan_lock);
+	if (wifi_scan_auto_power) {
+		(void)k_work_schedule(&wifi_scan_auto_off_work, K_MSEC(250));
+	}
+}
+
+static int wt_wifi_scan_request_once(struct net_if *iface,
+				     const struct wifi_scan_params *params)
+{
+	int ret;
+
+	if (wifi_scan_running) {
+		wifi_scan_requested = false;
+		return -EALREADY;
+	}
+
+	k_mutex_lock(&wifi_scan_lock, K_FOREVER);
+	wt_wifi_scan_mark_started_locked();
+	wifi_scan_requested = false;
+	k_mutex_unlock(&wifi_scan_lock);
+
+	ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, (void *)params, sizeof(*params));
+	if (ret) {
+		wt_wifi_scan_mark_start_failed(ret);
+	}
+
+	return ret;
+}
+
 static int wt_wifi_scan_start(void)
 {
 	struct net_if *iface;
 	struct wifi_scan_params params = { 0 };
 	int ret;
 
-	if (wifi_scan_running) {
+	if (wifi_scan_requested || wifi_scan_running) {
 		return -EALREADY;
 	}
 
+	if (!wifi_requested) {
+		wifi_scan_auto_power = true;
+	}
+
+	wifi_scan_requested = true;
 	wt_wifi_scan_enable_support_services();
 
 	iface = net_if_get_first_wifi();
 	if (!iface) {
+		wifi_scan_requested = false;
 		return -ENODEV;
 	}
 
 	ret = wifi_prepare_once();
 	if (ret) {
+		wifi_scan_requested = false;
 		return ret;
 	}
 
-	k_mutex_lock(&wifi_scan_lock, K_FOREVER);
-	wt_wifi_scan_clear_locked();
-	wifi_scan_running = true;
-	wifi_scan_last_status = -EINPROGRESS;
-	wifi_scan_started_ms = k_uptime_get();
-	k_sem_reset(&wifi_scan_done_sem);
-	k_mutex_unlock(&wifi_scan_lock);
+	if (wifi_requested_since_ms > 0 && !wifi_context.connected) {
+		int64_t age_ms = k_uptime_get() - wifi_requested_since_ms;
+
+		if (age_ms >= 0 && age_ms < WT_WIFI_SCAN_POWER_SETTLE_MS) {
+			k_sleep(K_MSEC(WT_WIFI_SCAN_POWER_SETTLE_MS - age_ms));
+		}
+	}
 
 	params.scan_type = WIFI_SCAN_TYPE_ACTIVE;
 	params.bands = BIT(WIFI_FREQ_BAND_2_4_GHZ) | BIT(WIFI_FREQ_BAND_5_GHZ);
@@ -404,17 +468,22 @@ static int wt_wifi_scan_start(void)
 	params.dwell_time_passive = 120;
 	params.max_bss_cnt = WT_WIFI_SCAN_MAX_RESULTS;
 
-	ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, &params, sizeof(params));
-	if (ret) {
-		k_mutex_lock(&wifi_scan_lock, K_FOREVER);
-		wifi_scan_running = false;
-		wifi_scan_last_status = ret;
-		wifi_scan_finished_ms = k_uptime_get();
-		k_mutex_unlock(&wifi_scan_lock);
-		return ret;
+	for (int attempt = 0; attempt <= WT_WIFI_SCAN_BUSY_RETRY_COUNT; attempt++) {
+		ret = wt_wifi_scan_request_once(iface, &params);
+		if (!ret || ret == -EALREADY) {
+			return ret;
+		}
+
+		if (ret != -EBUSY && ret != -EAGAIN) {
+			return ret;
+		}
+
+		if (attempt < WT_WIFI_SCAN_BUSY_RETRY_COUNT) {
+			k_sleep(K_MSEC(WT_WIFI_SCAN_BUSY_RETRY_MS));
+		}
 	}
 
-	return 0;
+	return ret;
 }
 
 static int wt_wifi_scan_format_len(char *buf, size_t size, int len)
@@ -640,7 +709,7 @@ int wt_wifi_scan_command(char **argv, size_t argc, char *rsp, size_t rsp_len)
 		json = true;
 		ret = wt_wifi_scan_start();
 		if (ret && ret != -EALREADY) {
-			return wt_wifi_cmd_rsp(rsp, rsp_len, "{\"type\":\"wifi_scan\",\"error\":%d}", ret);
+			return wt_wifi_scan_format_results(rsp, rsp_len, true);
 		}
 		ret = k_sem_take(&wifi_scan_done_sem, K_MSEC(WT_WIFI_SCAN_TIMEOUT_MS));
 		if (ret) {
@@ -1123,14 +1192,21 @@ static int wifi_disconnect(void)
 
 int wt_wifi_service_set(bool enable)
 {
+	struct net_if *iface = net_if_get_first_wifi();
+
 	if (enable) {
 		wifi_requested = true;
+		wifi_requested_since_ms = k_uptime_get();
 		k_sem_give(&wifi_control_sem);
-		LOG_INF("Wi-Fi command mode enabled");
+		LOG_INF("Wi-Fi radio requested");
 		return 0;
 	}
 
 	wifi_requested = false;
+	wifi_connect_requested = false;
+	wifi_scan_auto_power = false;
+	wifi_requested_since_ms = 0;
+	wifi_scan_requested = false;
 	wifi_context.connect_result = true;
 	wifi_context.ipv4_bound = false;
 	snprintk(wifi_ipv4_text, sizeof(wifi_ipv4_text), "0.0.0.0");
@@ -1141,21 +1217,38 @@ int wt_wifi_service_set(bool enable)
 		wifi_context.connected = false;
 	}
 
+	if (iface && net_if_is_admin_up(iface)) {
+		int ret = net_if_down(iface);
+
+		if (ret < 0 && ret != -EALREADY) {
+			LOG_WRN("Wi-Fi interface down request failed: %d", ret);
+		}
+	}
+
+#ifdef CONFIG_WIFI_READY_LIB
+	wifi_ready_status = false;
+#endif
+	wifi_prepared = false;
+
 	LOG_INF("Wi-Fi command mode disabled");
 	return 0;
 }
 
 int wt_wifi_reconnect_if_requested(void)
 {
-	bool restart = wifi_requested;
+	wifi_connect_requested = true;
 
-	if (!restart) {
-		return 0;
+	if (!wifi_requested) {
+		return wt_wifi_service_set(true);
 	}
 
-	(void)wt_wifi_service_set(false);
-	k_sleep(K_MSEC(500));
-	return wt_wifi_service_set(true);
+	if (wifi_context.connected) {
+		(void)wifi_disconnect();
+	}
+
+	wifi_context.connect_result = false;
+	k_sem_give(&wifi_control_sem);
+	return 0;
 }
 
 int wt_wifi_status_log(void)
@@ -1241,7 +1334,7 @@ static void handle_wifi_disconnect_result(struct net_mgmt_event_callback *cb)
 	wifi_context.connected = false;
 	wifi_context.ipv4_bound = false;
 	snprintk(wifi_ipv4_text, sizeof(wifi_ipv4_text), "0.0.0.0");
-	wifi_context.connect_result = false;
+	wifi_context.connect_result = true;
 
 	wt_wifi_status_log();
 }
@@ -1259,6 +1352,7 @@ static void wifi_scan_event_handler(struct net_mgmt_event_callback *cb,
 	case NET_EVENT_WIFI_SCAN_DONE: {
 		const struct wifi_status *status = (const struct wifi_status *)cb->info;
 		k_mutex_lock(&wifi_scan_lock, K_FOREVER);
+		wifi_scan_requested = false;
 		wifi_scan_running = false;
 		wifi_scan_valid = true;
 		wifi_scan_finished_ms = k_uptime_get();
@@ -1272,10 +1366,23 @@ static void wifi_scan_event_handler(struct net_mgmt_event_callback *cb,
 				wt_leds_wifi_activity();
 			}
 		k_sem_give(&wifi_scan_done_sem);
+		if (wifi_scan_auto_power) {
+			(void)k_work_schedule(&wifi_scan_auto_off_work, K_MSEC(250));
+		}
 		break;
 	}
 	default:
 		break;
+	}
+}
+
+static void wt_wifi_scan_auto_off_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	if (wifi_scan_auto_power && !wifi_scan_running && !wifi_scan_requested && !wifi_context.connected) {
+		wifi_scan_auto_power = false;
+		(void)wt_wifi_service_set(false);
 	}
 }
 
@@ -1360,7 +1467,7 @@ static bool is_mac_addr_set(struct net_if *iface)
 	return net_eth_is_addr_valid(&wifi_addr);
 }
 
-static int wifi_prepare_once(void)
+static int wifi_prepare_once_unlocked(void)
 {
 	struct net_if *iface = net_if_get_first_wifi();
 	int ret;
@@ -1478,6 +1585,16 @@ static int wifi_prepare_once(void)
 	return 0;
 }
 
+static int wifi_prepare_once(void)
+{
+	int ret;
+
+	k_mutex_lock(&wifi_prepare_lock, K_FOREVER);
+	ret = wifi_prepare_once_unlocked();
+	k_mutex_unlock(&wifi_prepare_lock);
+	return ret;
+}
+
 static int wifi_worker_loop(void)
 {
 	int ret;
@@ -1491,6 +1608,7 @@ static int wifi_worker_loop(void)
 		if (ret) {
 			LOG_ERR("Wi-Fi prepare failed: %d", ret);
 			wifi_requested = false;
+			wifi_connect_requested = false;
 			continue;
 		}
 
@@ -1507,12 +1625,12 @@ static int wifi_worker_loop(void)
 		}
 #endif
 
-		if (!wifi_requested || wifi_context.connected) {
+		if (!wifi_requested || wifi_context.connected || !wifi_connect_requested) {
 			k_sleep(K_MSEC(250));
 			continue;
 		}
 
-		if (wifi_scan_running) {
+		if (wifi_scan_requested || wifi_scan_running) {
 			k_sleep(K_MSEC(250));
 			continue;
 		}

@@ -163,7 +163,7 @@ Each frame is kept within the active BLE notification payload, so it works with 
 
 ## Wi-Fi scan flow
 
-Scanning turns on the Wi-Fi request state, the UDP command service, and discovery beacon support. The green LED fast-blinks while the scan is active and stays off when Wi-Fi is not requested.
+Scanning can run from the BLE-only boot state. If Wi-Fi is off, the scan path temporarily brings the Wi-Fi interface up, enables the UDP command and discovery service flags, scans, then releases the Wi-Fi request when the scan is complete. If `wifi on` was already requested, scanning leaves Wi-Fi on afterward. `wifi on` prepares the radio/interface. `wifi reconnect` associates using stored credentials. The green LED fast-blinks while a scan is pending or active and stays off when Wi-Fi is not requested.
 
 Default BLE-safe scan flow:
 
@@ -198,7 +198,6 @@ Connect from a scanned result:
 
 ```txt
 wifi scan connect 1 "wifi password" wpa2
-wifi on
 wifi status
 ```
 
@@ -206,7 +205,7 @@ For open networks:
 
 ```txt
 wifi scan open 1
-wifi on
+wifi status
 ```
 
 ## UART/RTT shell
@@ -349,63 +348,334 @@ tx wifi 192.168.1.50 5000 "payload with spaces"
 
 ## Demo command flows
 
-BLE sanity:
+These flows are the quick bring-up paths for BLE, UART, Wi-Fi UDP, scan, bridge routing, and safe shutdown. Replace IPs, SSIDs, and passwords with local values.
+
+### 1. First BLE sanity test
+
+Connect from the web console or nRF Connect, enable command response notifications, then send:
 
 ```txt
 status
 ble status
+config
 id
 version
 ```
 
-Enable Wi-Fi and UDP command service:
+Expected shape:
 
 ```txt
-mode both
-wifi cred set "My WiFi" "my password" wpa2
-wifi on
-wifi cmd on
-wifi status
+BLE connected
+mode=ble
+wifi_req=off
 ```
 
-Scan and connect by index:
+### 2. UART to BLE TX test
+
+Enable notifications on the BLE TX characteristic:
 
 ```txt
-wifi scan json
-wifi scan item 1 json
-wifi scan connect 1 "my password" wpa2
-wifi on
-wifi status
+TX notify UUID:
+7f1c0002-2b5a-4f2d-9a31-d6a5f4e040e1
 ```
 
-Full streamed scan:
+From UART/RTT:
+
+```txt
+wt tx ble "hello from uart"
+```
+
+Expected BLE/webapp log:
+
+```txt
+TX <= hello from uart
+```
+
+If the response says TX notify is off, the BLE client is connected but TX notifications are not enabled.
+
+### 3. BLE to UART test
+
+From BLE command write:
+
+```txt
+tx uart "hello from ble"
+```
+
+Expected UART/log-side output:
+
+```txt
+hello from ble
+```
+
+### 4. BLE command response stream test
+
+Enable command response notifications, then request a full streamed scan:
 
 ```txt
 wifi scan full json
 ```
 
-Send a UDP packet from the board to the web console host:
+The web console should reassemble the stream frames and show one JSON response. Raw frames use this form:
 
 ```txt
-tx wifi 192.168.1.50 5000 "hello from WT02E40E"
+~S001
+~C001000<payload>
+~C001001<payload>
+~E001002
 ```
 
-Keep BLE and Wi-Fi active together:
+### 5. BLE-safe Wi-Fi scan and connect by index
+
+This path keeps each response under the small BLE payload budget:
 
 ```txt
-mode both
-wifi on
-ble status
+wifi scan json
+wifi scan last json
+wifi scan item 1 json
+wifi scan item 2 json
+wifi scan item 3 json
+```
+
+Connect using the selected AP index:
+
+```txt
+wifi scan connect 1 "your password" wpa2
+wifi reconnect
 wifi status
 ```
 
-Schedule a safe radio cutoff:
+For an open AP:
+
+```txt
+wifi scan open 1
+wifi status
+wifi status
+```
+
+### 6. BLE to Wi-Fi UDP packet test
+
+Start the Node webapp helper:
+
+```powershell
+cd BLE_Webapp
+node server.js
+```
+
+Open:
+
+```txt
+http://localhost:8080
+```
+
+Connect BLE, then send:
+
+```txt
+mode both
+wifi cred set "Your SSID" "Your Password" wpa2
+wifi reconnect
+wifi status
+```
+
+After IPv4 is bound, send a UDP packet to the Node listener:
+
+```txt
+tx wifi 192.168.1.50 5000 "hello from board over udp"
+```
+
+Expected webapp log:
+
+```txt
+UDP <= <board-ip>:<port> "hello from board over udp"
+```
+
+### 7. Wi-Fi UDP command to BLE TX test
+
+With BLE connected and TX notifications enabled:
+
+```txt
+mode both
+wifi reconnect
+wifi cmd on
+wifi status
+```
+
+In the webapp Wi-Fi command panel, send to the board IP and command port:
+
+```txt
+tx ble "hello from wifi command path"
+```
+
+Expected BLE log:
+
+```txt
+TX <= hello from wifi command path
+```
+
+### 8. Wi-Fi UDP command to UART test
+
+In the webapp Wi-Fi command panel:
+
+```txt
+tx uart "hello from wifi command path"
+```
+
+Expected UART/log-side output:
+
+```txt
+hello from wifi command path
+```
+
+### 9. Discover the board on the LAN
+
+Enable discovery and save it if desired:
+
+```txt
+discovery on
+config save
+```
+
+Once Wi-Fi has IPv4, the board broadcasts discovery JSON. The webapp should auto-fill:
+
+```txt
+Board IP
+Board command port
+Device name
+Firmware/version field
+```
+
+### 10. Rename the BLE device
+
+```txt
+ble name set WT02E40E-CMD-01
+config save
+```
+
+The current connection keeps working. The new name appears on the next advertising cycle.
+
+### 11. Change Wi-Fi command port live
+
+```txt
+wifi cmd port
+wifi cmd port 5002
+config save
+```
+
+If the command was sent over Wi-Fi, the response is sent from the old port first, then the board rebinds to the new port.
+
+### 12. Use request IDs
+
+```txt
+#42 status
+#43 wifi status json
+#44 tx ble "hello with an ID"
+```
+
+Expected response style:
+
+```txt
+#42 ok ...
+#43 {"ok":true,...}
+#44 ok ble tx ...
+```
+
+### 13. Safe delayed radio cutoff
+
+From BLE:
 
 ```txt
 ble off 5s
-wifi off 5s
-mode ble 5s
 ```
+
+Expected:
+
+```txt
+ok ble off scheduled 5000 ms
+```
+
+The BLE link drops after the delay.
+
+From Wi-Fi:
+
+```txt
+wifi off 5s
+```
+
+Expected:
+
+```txt
+ok wifi off scheduled 5000 ms
+```
+
+The Wi-Fi command path disappears after the delay.
+
+### 14. Bridge all enabled outputs
+
+Set a Wi-Fi bridge target:
+
+```txt
+bridge target 192.168.1.50 5000
+bridge all on
+bridge status
+```
+
+Send a bridge message:
+
+```txt
+bridge send "hello across enabled bridge outputs"
+```
+
+Expected outputs when available:
+
+```txt
+BLE TX notification if subscribed
+UART output
+UDP packet to bridge target if Wi-Fi is connected
+```
+
+### 15. Indicator checks
+
+Manual LED sanity checks:
+
+```txt
+led status
+led test all
+led test ble
+led test wifi
+led pulse activity
+led pulse alert
+```
+
+Runtime traffic indication:
+
+```txt
+BLE connected                 LED0 solid
+BLE command response/TX sent   LED0 short off dip
+Wi-Fi scan running             LED1 fast blink
+Wi-Fi IPv4 bound               LED1 solid
+```
+
+### 16. J18 UART-to-BLE blink test
+
+With the SAMD21J18 sending UART commands into the nRF bridge:
+
+```txt
+tx ble j18_blink
+```
+
+Expected BLE/webapp log when TX notifications are enabled:
+
+```txt
+TX <= j18_blink
+```
+
+### 17. Reboot safely from BLE or Wi-Fi
+
+```txt
+fw status
+fw reboot 5s
+```
+
+The delayed form gives the response time to reach the client before the board resets.
 
 ## Source layout
 

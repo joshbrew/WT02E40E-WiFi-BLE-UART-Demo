@@ -120,7 +120,7 @@ Backslash escapes are supported inside quoted BLE and UDP command arguments for 
 
 ## Wi-Fi scan
 
-BLE-safe scan:
+BLE-safe scan. The scan path waits for Wi-Fi radio readiness and retries briefly if the radio is busy. When Wi-Fi is off, scan uses temporary radio power and turns it back off after the scan. Use `wt wifi reconnect` to associate with stored credentials.
 
 ```txt
 wt wifi scan json
@@ -138,7 +138,6 @@ Connect from a scanned AP:
 
 ```txt
 wt wifi scan connect 1 "wifi password" wpa2
-wt wifi on
 wt wifi status
 ```
 
@@ -146,7 +145,7 @@ Open AP by scan index:
 
 ```txt
 wt wifi scan open 1
-wt wifi on
+wt wifi status
 ```
 
 ## LED states
@@ -175,6 +174,77 @@ wt led pulse ble
 wt led pulse wifi
 wt led pulse activity
 wt led pulse alert
+```
+
+
+## Demo flows
+
+BLE sanity:
+
+```txt
+wt status
+wt ble status
+wt config
+```
+
+UART to BLE TX:
+
+```txt
+wt tx ble "hello from uart"
+```
+
+BLE to UART:
+
+```txt
+tx uart "hello from ble"
+```
+
+BLE-safe scan and item pull:
+
+```txt
+wifi scan json
+wifi scan last json
+wifi scan item 1 json
+wifi scan item 2 json
+wifi scan connect 1 "wifi password" wpa2
+wifi status
+```
+
+Full streamed scan:
+
+```txt
+wifi scan full json
+```
+
+Wi-Fi command listener:
+
+```txt
+mode both
+wifi reconnect
+wifi cmd on
+wifi status
+```
+
+Wi-Fi UDP command to BLE TX:
+
+```txt
+tx ble "hello from wifi command path"
+```
+
+Bridge all outputs:
+
+```txt
+bridge target 192.168.1.50 5000
+bridge all on
+bridge send "hello across enabled bridge outputs"
+```
+
+Safe delayed cutoff:
+
+```txt
+ble off 5s
+wifi off 5s
+mode ble 5s
 ```
 
 ## BLE characteristics
